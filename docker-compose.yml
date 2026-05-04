@@ -1,0 +1,15 @@
+services:
+  oms-gateway:
+    build: .
+    container_name: oms-gateway
+    restart: unless-stopped
+    env_file:
+      - /srv/secrets/oms-gateway.env
+    ports:
+      - "127.0.0.1:8002:8002"
+    networks:
+      - infra-net
+
+networks:
+  infra-net:
+    external: true
