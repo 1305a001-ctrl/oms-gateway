@@ -78,4 +78,4 @@ Required env (see `src/oms_gateway/settings.py` for full list):
 
 ## Health
 
-`GET http://localhost:8002/health`
+`GET http://localhost:8003/health`

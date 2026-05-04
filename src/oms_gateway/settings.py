@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     halt_strategy_prefix: str = "system:halt:strategy:"
 
     # Health endpoint
-    health_port: int = 8002
+    health_port: int = 8003
 
     # Logging
     log_level: str = "INFO"

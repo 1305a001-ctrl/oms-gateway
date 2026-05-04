@@ -6,7 +6,7 @@ services:
     env_file:
       - /srv/secrets/oms-gateway.env
     ports:
-      - "127.0.0.1:8002:8002"
+      - "127.0.0.1:8003:8003"
     networks:
       - infra-net
 
