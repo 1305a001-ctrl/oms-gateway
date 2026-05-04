@@ -122,7 +122,7 @@ def test_derive_venue_stocks():
 
 
 def test_derive_venue_crypto():
-    assert derive_venue("crypto", "BTC-USDT") == "okx"
+    assert derive_venue("crypto", "BTC-USDT") == "binance"
 
 
 def test_derive_venue_predictions():
