@@ -71,9 +71,9 @@ def derive_venue(asset_class: str, asset: str) -> str:
     if asset_class == "stocks":
         return "alpaca"
     if asset_class == "crypto":
-        # Spot pairs → okx; perps → bybit. asset format hint:
-        # 'BTC-USDT', 'ETH-USDT-PERP'. v0.1 defaults all → okx.
-        return "okx"
+        # All crypto (spot + perps) routes through binance — the only crypto
+        # adapter live as of v0.2. OKX/Bybit deferred pending account access.
+        return "binance"
     if asset_class == "predictions":
         return "polymarket"
     if asset_class == "forex":
