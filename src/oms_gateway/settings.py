@@ -32,6 +32,11 @@ class Settings(BaseSettings):
         "poly-bet": 2.0,
         "hedge": 3.0,
     }
+    # Per-symbol overrides for bucket sizing — wins over bucket_size_pct_max
+    # when the alpha's asset matches. Format (env var):
+    #   "BTC-USDT:fast-intraday=0.7,ETH-USDT:fast-intraday=0.4,NVDA:fast-intraday=0.3"
+    # Asset matching is case-insensitive on the asset key. Empty = no overrides.
+    bucket_size_overrides: str = ""
 
     # Halt keys (must match pa-agent + risk-watcher)
     halt_key: str = "system:halt"

@@ -109,6 +109,7 @@ async def _route_one(alpha: Alpha) -> None:
             bucket=bucket,
             alpha_metadata=alpha.metadata,
             confidence=alpha.confidence,
+            asset=alpha.asset,
         )
     else:
         side = derive_side(alpha.direction) if alpha.direction != "flat" else "close"
