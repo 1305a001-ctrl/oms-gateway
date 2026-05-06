@@ -2,17 +2,66 @@
 
 Computes the notional USD for an order. Pure function — no I/O.
 
-Priority:
+Priority (highest to lowest):
   1. Alpha can hint a size via metadata.suggested_notional_usd.
-  2. Bucket cap: bucket_size_pct_max[bucket] * paper_account_equity_usd.
-  3. Fallback: default_per_trade_pct * paper_account_equity_usd.
+  2. Per-symbol override: bucket_size_overrides["<ASSET>:<bucket>"]
+     (Phase 2.7 — lets ETH momentum size differently from BTC momentum
+     even when both share the fast-intraday bucket).
+  3. Bucket cap: bucket_size_pct_max[bucket] * paper_account_equity_usd.
+  4. Fallback: default_per_trade_pct * paper_account_equity_usd.
 
-The min of (alpha hint, bucket cap) is taken so a strategy can never exceed
-its bucket allowance.
+The min of (alpha hint, resolved cap) is taken so a strategy can never
+exceed its allowance.
 """
 from typing import Any
 
 from oms_gateway.settings import settings
+
+
+def parse_size_overrides(raw: str) -> dict[str, float]:
+    """Pure: parse env-var string → {'<ASSET>:<bucket>': pct}.
+
+    Format:
+        "BTC-USDT:fast-intraday=0.7,ETH-USDT:fast-intraday=0.4"
+    Keys are uppercased on the asset, lowercased on the bucket.
+    Bad / unparseable entries are silently skipped (so a typo on one
+    line doesn't kill startup).
+    """
+    out: dict[str, float] = {}
+    if not raw:
+        return out
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry or "=" not in entry:
+            continue
+        key, value = entry.split("=", 1)
+        if ":" not in key:
+            continue
+        asset, bucket = key.split(":", 1)
+        asset = asset.strip().upper()
+        bucket = bucket.strip().lower()
+        if not asset or not bucket:
+            continue
+        try:
+            pct = float(value.strip())
+        except (ValueError, TypeError):
+            continue
+        if pct <= 0:
+            continue
+        out[f"{asset}:{bucket}"] = pct
+    return out
+
+
+def _resolve_bucket_pct(*, asset: str | None, bucket: str | None) -> float:
+    """Per-symbol override → bucket cap → default fallback. Pure."""
+    overrides = parse_size_overrides(settings.bucket_size_overrides)
+    if asset and bucket:
+        key = f"{asset.upper()}:{bucket.lower()}"
+        if key in overrides:
+            return overrides[key]
+    return settings.bucket_size_pct_max.get(
+        bucket or "", settings.default_per_trade_pct
+    )
 
 
 def compute_notional(
@@ -20,6 +69,7 @@ def compute_notional(
     bucket: str | None,
     alpha_metadata: dict[str, Any],
     confidence: float,
+    asset: str | None = None,
 ) -> float:
     """Return the order's notional USD.
 
@@ -27,15 +77,14 @@ def compute_notional(
         bucket: 'fast-intraday' / 'swing' / 'conviction' / 'poly-bet' / 'hedge' / None.
         alpha_metadata: Alpha.metadata. May contain 'suggested_notional_usd'.
         confidence: alpha.confidence (0..1). Sub-conviction sizes scale linearly.
+        asset: Alpha.asset (e.g. 'BTC-USDT', 'NVDA'). Enables per-symbol override.
 
     Returns:
         notional in USD, always > 0.
     """
     equity = settings.paper_account_equity_usd
 
-    bucket_cap_pct = settings.bucket_size_pct_max.get(
-        bucket or "", settings.default_per_trade_pct
-    )
+    bucket_cap_pct = _resolve_bucket_pct(asset=asset, bucket=bucket)
     bucket_cap_usd = (bucket_cap_pct / 100.0) * equity
 
     alpha_hint = alpha_metadata.get("suggested_notional_usd")
