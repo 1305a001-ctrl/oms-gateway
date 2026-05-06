@@ -1,6 +1,6 @@
 services:
   oms-gateway:
-    build: .
+    image: ghcr.io/1305a001-ctrl/oms-gateway:latest
     container_name: oms-gateway
     restart: unless-stopped
     env_file:
