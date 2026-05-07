@@ -13,7 +13,7 @@ import structlog
 from signals_contract.alpha import Alpha
 
 from oms_gateway.db import db
-from oms_gateway.preflight import evaluate
+from oms_gateway.preflight import ExistingPosition, evaluate
 from oms_gateway.redis_client import r
 from oms_gateway.settings import settings
 from oms_gateway.sizing import compute_notional, derive_side, derive_venue
@@ -93,11 +93,48 @@ async def _route_one(alpha: Alpha) -> None:
     snapshots = await db.latest_risk_snapshots(scope="total")
     bucket = await db.strategy_bucket(strategy_id)
 
+    # Pre-compute the proposed notional so the Phase 2.8 per-position cap
+    # check can evaluate whether this trade would push the existing
+    # position past its bucket cap. Sizing is pure / cheap; recomputed in
+    # the accept branch below as the source of truth.
+    proposed_notional = (
+        None
+        if alpha.direction == "flat"
+        else compute_notional(
+            bucket=bucket,
+            alpha_metadata=alpha.metadata,
+            confidence=alpha.confidence,
+            asset=alpha.asset,
+        )
+    )
+
+    existing_pos_row = await db.existing_open_position(
+        strategy_id=strategy_id, asset=alpha.asset,
+    )
+    existing_position = (
+        ExistingPosition(
+            qty=float(existing_pos_row["qty"]),
+            side=existing_pos_row["side"],
+            mark_price=(
+                float(existing_pos_row["mark_price"])
+                if existing_pos_row["mark_price"] is not None
+                else None
+            ),
+            avg_entry_price=float(existing_pos_row["avg_entry_price"]),
+        )
+        if existing_pos_row
+        else None
+    )
+
     decision = evaluate(
         halt_active=sys_halt,
         strategy_halt_active=strat_halt,
         strategy_slug=strategy_slug,
         risk_snapshots=snapshots,
+        existing_position=existing_position,
+        alpha_direction=alpha.direction,
+        proposed_notional_usd=proposed_notional,
+        bucket=bucket,
     )
 
     if decision.accept and alpha.direction == "flat":
@@ -105,12 +142,7 @@ async def _route_one(alpha: Alpha) -> None:
         notional = None
     elif decision.accept:
         side = derive_side(alpha.direction)
-        notional = compute_notional(
-            bucket=bucket,
-            alpha_metadata=alpha.metadata,
-            confidence=alpha.confidence,
-            asset=alpha.asset,
-        )
+        notional = proposed_notional
     else:
         side = derive_side(alpha.direction) if alpha.direction != "flat" else "close"
         notional = None  # rejected: don't size
