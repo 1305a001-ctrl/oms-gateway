@@ -1,5 +1,6 @@
 """Tiny aiohttp /health endpoint for uptime-kuma + grafana."""
 import asyncio
+from collections.abc import Awaitable
 
 import structlog
 from aiohttp import web
@@ -22,7 +23,10 @@ async def _health(_request: web.Request) -> web.Response:
         checks["postgres"] = f"down: {exc}"
 
     try:
-        await r().ping()
+        # redis-py types ping() as `Awaitable[bool] | bool` (sync vs async
+        # mode); cast pins it to the async branch we're actually using.
+        ping_result: Awaitable[bool] = r().ping()  # type: ignore[assignment]
+        await asyncio.wait_for(ping_result, timeout=2.0)
         checks["redis"] = "ok"
     except Exception as exc:
         checks["redis"] = f"down: {exc}"
