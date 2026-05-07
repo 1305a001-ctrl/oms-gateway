@@ -55,6 +55,28 @@ class DB:
         )
         return {r["period"]: dict(r) for r in rows}
 
+    async def existing_open_position(
+        self, *, strategy_id: UUID, asset: str
+    ) -> dict[str, Any] | None:
+        """Return the open position for this (strategy, asset) if any.
+
+        Used by Phase 2.8 per-position cap preflight check. Returns the
+        most-recently-opened position when (rare) duplicates exist.
+        """
+        row = await self.pool.fetchrow(
+            """
+            SELECT qty, side, mark_price, avg_entry_price
+            FROM positions
+            WHERE strategy_id = $1 AND asset = $2 AND status = 'open'
+              AND qty > 0
+            ORDER BY opened_at DESC
+            LIMIT 1
+            """,
+            strategy_id,
+            asset,
+        )
+        return dict(row) if row else None
+
     async def strategy_bucket(self, strategy_id: UUID) -> str | None:
         """Look up the bucket from strategies.frontmatter JSONB."""
         row = await self.pool.fetchrow(

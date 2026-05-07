@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # Asset matching is case-insensitive on the asset key. Empty = no overrides.
     bucket_size_overrides: str = ""
 
+    # Phase 2.8 — per-position cap multiplier. A position can scale up to
+    # `bucket_size_pct × bucket_position_cap_mult × equity` USD before
+    # further entries on the same (strategy, asset) get rejected.
+    # 5.0 ⇒ a fast-intraday position can hold 5 trades' worth before capping.
+    # Trades in the *opposite* direction always pass — let positions close.
+    bucket_position_cap_mult: float = 5.0
+
     # Halt keys (must match pa-agent + risk-watcher)
     halt_key: str = "system:halt"
     halt_strategy_prefix: str = "system:halt:strategy:"
