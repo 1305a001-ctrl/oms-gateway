@@ -184,12 +184,15 @@ def evaluate(
             snapshot_used={"strategy_slug": strategy_slug},
         )
 
-    for period, cap in (
+    # Type annotation pins the period strings as literals so mypy can prove
+    # they match _check_dd_breach's Literal accept set.
+    dd_checks: tuple[tuple[Literal["daily", "weekly", "monthly", "total"], float], ...] = (
         ("daily", settings.daily_dd_pct_cap),
         ("weekly", settings.weekly_dd_pct_cap),
         ("monthly", settings.monthly_dd_pct_cap),
         ("total", settings.total_dd_pct_cap),
-    ):
+    )
+    for period, cap in dd_checks:
         breach = _check_dd_breach(period, risk_snapshots, cap)
         if breach is not None:
             return breach
