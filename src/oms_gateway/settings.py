@@ -45,12 +45,41 @@ class Settings(BaseSettings):
     # Trades in the *opposite* direction always pass — let positions close.
     bucket_position_cap_mult: float = 5.0
 
+    # Phase 2.9 — concentration guards. Cap total open notional across
+    # all positions sharing a *bucket* (e.g. poly-bet) or an *underlying
+    # cluster* (e.g. all bitcoin-* poly markets, or all BTC-USDT venues).
+    # Defends against the 6-sell-wings-on-BTC failure mode where a single
+    # strategy fans out across correlated markets and ends up with the
+    # bucket total many multiples of intended sizing.
+    # Caps are % of paper_account_equity_usd. Empty / 0 disables the cap.
+    bucket_total_exposure_pct_cap: dict[str, float] = {
+        "fast-intraday": 15.0,
+        "swing": 20.0,
+        "conviction": 30.0,
+        "poly-bet": 20.0,
+        "hedge": 15.0,
+    }
+    # Default cluster cap (% of equity) applied to every (venue, underlying)
+    # cluster — e.g. all open `poly:bitcoin` markets sum to ≤ this. Set 0 to
+    # disable the cluster guard entirely. 8% gives plenty of room for the
+    # threshold-ladder strategies while still bounding correlated exposure.
+    cluster_exposure_pct_cap: float = 8.0
+
     # Halt keys (must match pa-agent + risk-watcher)
     halt_key: str = "system:halt"
     halt_strategy_prefix: str = "system:halt:strategy:"
 
+    # Cap-breach event stream — Phase 2.9. Whenever the bucket or cluster
+    # concentration guard rejects an intent, we XADD the breach payload
+    # here so pa-agent can forward to Telegram.
+    cap_breaches_stream: str = "risk:cap_breaches"
+    cap_breaches_stream_maxlen: int = 10_000
+
     # Health endpoint
     health_port: int = 8003
+
+    # Metrics — Phase 2.9 Prometheus exposition + cluster-exposure gauges.
+    metrics_refresh_interval_sec: int = 60
 
     # Logging
     log_level: str = "INFO"

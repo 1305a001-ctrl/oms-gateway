@@ -13,7 +13,12 @@ import structlog
 from signals_contract.alpha import Alpha
 
 from oms_gateway.db import db
-from oms_gateway.preflight import ExistingPosition, evaluate
+from oms_gateway.preflight import (
+    ExistingPosition,
+    cluster_for,
+    cluster_sql_filter,
+    evaluate,
+)
 from oms_gateway.redis_client import r
 from oms_gateway.settings import settings
 from oms_gateway.sizing import compute_notional, derive_side, derive_venue
@@ -126,6 +131,24 @@ async def _route_one(alpha: Alpha) -> None:
         else None
     )
 
+    # Phase 2.9 — concentration: total open notional in this bucket and in
+    # the underlying cluster (e.g. all `poly:bitcoin` markets together).
+    venue = derive_venue(alpha.asset_class, alpha.asset)
+    bucket_exposure = (
+        await db.bucket_open_exposure_usd(bucket) if bucket else 0.0
+    )
+    cluster = cluster_for(venue, alpha.asset)
+    cluster_filter = cluster_sql_filter(cluster)
+    cluster_exposure = (
+        await db.cluster_open_exposure_usd(
+            venue=cluster_filter[0],
+            like_pattern=cluster_filter[1],
+            exact=cluster_filter[2],
+        )
+        if cluster_filter is not None
+        else 0.0
+    )
+
     decision = evaluate(
         halt_active=sys_halt,
         strategy_halt_active=strat_halt,
@@ -135,6 +158,9 @@ async def _route_one(alpha: Alpha) -> None:
         alpha_direction=alpha.direction,
         proposed_notional_usd=proposed_notional,
         bucket=bucket,
+        bucket_open_exposure_usd=bucket_exposure,
+        cluster=cluster,
+        cluster_open_exposure_usd=cluster_exposure,
     )
 
     if decision.accept and alpha.direction == "flat":
@@ -147,7 +173,6 @@ async def _route_one(alpha: Alpha) -> None:
         side = derive_side(alpha.direction) if alpha.direction != "flat" else "close"
         notional = None  # rejected: don't size
 
-    venue = derive_venue(alpha.asset_class, alpha.asset)
     idempotency_key = f"{strategy_slug or strategy_id}:{alpha.id}:entry"
 
     metadata = {
@@ -156,6 +181,7 @@ async def _route_one(alpha: Alpha) -> None:
         "alpha_edge_bps": alpha.edge_bps,
         "alpha_reasoning": alpha.reasoning,
         "bucket": bucket,
+        "cluster": cluster,
         "preflight_decision": {
             "accept": decision.accept,
             "reason": decision.reason,
@@ -201,6 +227,36 @@ async def _route_one(alpha: Alpha) -> None:
             rejection_reason=decision.reason,
             strategy_slug=strategy_slug,
         )
+
+    # Concentration-cap breaches are operator-visible — XADD to the
+    # cap-breach stream so pa-agent can forward to Telegram. We
+    # deliberately exclude `position_cap_exceeded` (per-strategy, common
+    # under healthy scaling) — only the cross-strategy breaches go here.
+    if decision.reason in (
+        "bucket_exposure_cap_exceeded",
+        "cluster_exposure_cap_exceeded",
+    ):
+        try:
+            await r().xadd(
+                settings.cap_breaches_stream,
+                {
+                    "data": json.dumps({
+                        "ts": datetime.now(UTC).isoformat(),
+                        "reason": decision.reason,
+                        "strategy_slug": strategy_slug or "",
+                        "asset": alpha.asset,
+                        "venue": venue,
+                        "bucket": bucket,
+                        "cluster": cluster,
+                        "snapshot": decision.snapshot_used,
+                        "alpha_id": str(alpha.id),
+                    }),
+                },
+                maxlen=settings.cap_breaches_stream_maxlen,
+                approximate=True,
+            )
+        except Exception:
+            log.exception("cap_breach.xadd_failed", reason=decision.reason)
 
 
 async def loop() -> None:

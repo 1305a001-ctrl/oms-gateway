@@ -5,7 +5,7 @@ import signal
 
 import structlog
 
-from oms_gateway import health, router
+from oms_gateway import health, metrics, router
 from oms_gateway.db import db
 from oms_gateway.redis_client import close as close_redis
 from oms_gateway.settings import settings
@@ -36,6 +36,7 @@ async def _run() -> None:
     tasks = [
         asyncio.create_task(router.loop(), name="router"),
         asyncio.create_task(health.serve(), name="health"),
+        asyncio.create_task(metrics.refresh_loop(), name="metrics-refresh"),
     ]
 
     loop = asyncio.get_running_loop()

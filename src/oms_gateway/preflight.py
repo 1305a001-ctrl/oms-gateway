@@ -41,6 +41,57 @@ class ExistingPosition:
     avg_entry_price: float
 
 
+def cluster_for(venue: str, asset: str) -> str:
+    """Pure: derive a concentration-cluster key from (venue, asset).
+
+    Groups correlated exposure across markets so the concentration guard
+    can spot, e.g., 6 separate `bitcoin-above-Xk-on-may-9` poly markets
+    as a single `poly:bitcoin` cluster.
+
+    Returns a stable string suitable for grouping in SQL. Heuristics are
+    deliberately simple — extending the map should be a one-line change.
+    """
+    v = (venue or "").lower()
+    a = (asset or "").strip()
+    if not a:
+        return f"{v}:?"
+    if v == "polymarket":
+        # Slugs are kebab-case; first token is the underlying entity
+        # ("bitcoin", "ethereum", "microstrategy", "donald-trump-…").
+        head = a.split("-", 1)[0].lower()
+        return f"poly:{head}" if head else f"poly:{a}"
+    if v == "binance":
+        # BTC-USDT, ETH-USDT, …  Cluster by base symbol so cross-margin
+        # and isolated views collapse into one underlying.
+        head = a.split("-", 1)[0].upper()
+        return f"crypto:{head}" if head else f"crypto:{a.upper()}"
+    if v == "alpaca":
+        # US-stocks tickers map 1:1 to clusters.
+        return f"stocks:{a.upper()}"
+    return f"{v}:{a.upper()}"
+
+
+def cluster_sql_filter(cluster: str) -> tuple[str, str, str] | None:
+    """Pure: turn a cluster key back into a SQL filter triple
+    `(venue, like_pattern, exact_match)` for db.cluster_open_exposure_usd().
+
+    Returns None for clusters we don't know how to expand (in which case
+    the cluster guard is a no-op for that key).
+    """
+    if not cluster or ":" not in cluster:
+        return None
+    head_kind, head = cluster.split(":", 1)
+    if not head:
+        return None
+    if head_kind == "poly":
+        return ("polymarket", f"{head}-%", head)
+    if head_kind == "crypto":
+        return ("binance", f"{head}-%", head)
+    if head_kind == "stocks":
+        return ("alpaca", "_NEVER_", head)  # exact-only via $3
+    return None
+
+
 def _check_dd_breach(
     period: Literal["daily", "weekly", "monthly", "total"],
     snapshots: dict[str, dict[str, Any]],
@@ -142,6 +193,82 @@ def _would_breach_position_cap(
     return None
 
 
+def _would_breach_bucket_exposure(
+    *,
+    bucket: str | None,
+    bucket_open_exposure_usd: float,
+    proposed_notional_usd: float | None,
+    alpha_direction: Literal["long", "short", "flat"],
+) -> Decision | None:
+    """Pure: is total open notional in this bucket about to exceed its cap?
+
+    Closing trades (flat) always pass. The cap is %-of-equity from
+    settings.bucket_total_exposure_pct_cap[bucket]; a missing entry
+    or 0 disables the cap for that bucket.
+    """
+    if alpha_direction == "flat":
+        return None
+    if proposed_notional_usd is None or proposed_notional_usd <= 0:
+        return None
+    cap_pct = settings.bucket_total_exposure_pct_cap.get(bucket or "", 0.0)
+    if cap_pct <= 0:
+        return None
+    cap_usd = cap_pct / 100.0 * settings.paper_account_equity_usd
+    would_be = bucket_open_exposure_usd + proposed_notional_usd
+    if would_be > cap_usd:
+        return Decision(
+            accept=False,
+            reason="bucket_exposure_cap_exceeded",
+            snapshot_used={
+                "bucket": bucket,
+                "cap_usd": round(cap_usd, 2),
+                "current_exposure_usd": round(bucket_open_exposure_usd, 2),
+                "would_be_exposure_usd": round(would_be, 2),
+                "proposed_notional_usd": round(proposed_notional_usd, 2),
+            },
+        )
+    return None
+
+
+def _would_breach_cluster_exposure(
+    *,
+    cluster: str | None,
+    cluster_open_exposure_usd: float,
+    proposed_notional_usd: float | None,
+    alpha_direction: Literal["long", "short", "flat"],
+) -> Decision | None:
+    """Pure: is total open notional in this underlying-cluster too high?
+
+    Catches the 6-sell-wings-on-BTC failure: separate strategies fanning
+    out across `poly:bitcoin` markets each pass their per-position cap
+    but together breach the cluster cap.
+    """
+    if alpha_direction == "flat":
+        return None
+    if proposed_notional_usd is None or proposed_notional_usd <= 0:
+        return None
+    if not cluster:
+        return None
+    cap_pct = settings.cluster_exposure_pct_cap
+    if cap_pct <= 0:
+        return None
+    cap_usd = cap_pct / 100.0 * settings.paper_account_equity_usd
+    would_be = cluster_open_exposure_usd + proposed_notional_usd
+    if would_be > cap_usd:
+        return Decision(
+            accept=False,
+            reason="cluster_exposure_cap_exceeded",
+            snapshot_used={
+                "cluster": cluster,
+                "cap_usd": round(cap_usd, 2),
+                "current_exposure_usd": round(cluster_open_exposure_usd, 2),
+                "would_be_exposure_usd": round(would_be, 2),
+                "proposed_notional_usd": round(proposed_notional_usd, 2),
+            },
+        )
+    return None
+
+
 def evaluate(
     *,
     halt_active: bool,
@@ -154,6 +281,10 @@ def evaluate(
     alpha_direction: Literal["long", "short", "flat"] = "long",
     proposed_notional_usd: float | None = None,
     bucket: str | None = None,
+    # Phase 2.9 — concentration inputs (optional; default 0 ⇒ no constraint).
+    bucket_open_exposure_usd: float = 0.0,
+    cluster: str | None = None,
+    cluster_open_exposure_usd: float = 0.0,
 ) -> Decision:
     """Run all preflight checks. First failing check rejects.
 
@@ -205,5 +336,23 @@ def evaluate(
     )
     if pos_breach is not None:
         return pos_breach
+
+    bucket_breach = _would_breach_bucket_exposure(
+        bucket=bucket,
+        bucket_open_exposure_usd=bucket_open_exposure_usd,
+        proposed_notional_usd=proposed_notional_usd,
+        alpha_direction=alpha_direction,
+    )
+    if bucket_breach is not None:
+        return bucket_breach
+
+    cluster_breach = _would_breach_cluster_exposure(
+        cluster=cluster,
+        cluster_open_exposure_usd=cluster_open_exposure_usd,
+        proposed_notional_usd=proposed_notional_usd,
+        alpha_direction=alpha_direction,
+    )
+    if cluster_breach is not None:
+        return cluster_breach
 
     return Decision(accept=True, reason=None)

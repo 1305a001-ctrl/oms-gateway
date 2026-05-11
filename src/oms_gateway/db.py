@@ -87,6 +87,54 @@ class DB:
             return None
         return row["bucket"]
 
+    async def bucket_open_exposure_usd(self, bucket: str) -> float:
+        """Sum mark-priced open notional across all strategies sharing
+        `frontmatter->>'bucket' = $1`. Falls back to avg_entry_price when
+        mark_price is NULL (fresh open, MTM hasn't ticked yet).
+        Returns 0.0 when bucket is empty/unknown."""
+        if not bucket:
+            return 0.0
+        row = await self.pool.fetchrow(
+            """
+            SELECT COALESCE(SUM(
+              p.qty * COALESCE(p.mark_price, p.avg_entry_price)
+            ), 0)::float AS exposure
+            FROM positions p
+            JOIN strategies s ON s.id = p.strategy_id
+            WHERE s.frontmatter->>'bucket' = $1
+              AND p.status = 'open' AND p.qty > 0
+            """,
+            bucket,
+        )
+        return float(row["exposure"]) if row else 0.0
+
+    async def cluster_open_exposure_usd(
+        self, *, venue: str, like_pattern: str, exact: str,
+    ) -> float:
+        """Sum mark-priced open notional for (venue, asset matches).
+
+        Caller derives `(venue, like_pattern, exact)` from a cluster key
+        via `preflight.cluster_sql_filter()`. Falsy `like_pattern` and
+        `exact` short-circuit to 0.0.
+        """
+        if not like_pattern and not exact:
+            return 0.0
+        row = await self.pool.fetchrow(
+            """
+            SELECT COALESCE(SUM(
+              p.qty * COALESCE(p.mark_price, p.avg_entry_price)
+            ), 0)::float AS exposure
+            FROM positions p
+            WHERE p.venue = $1
+              AND (p.asset LIKE $2 OR p.asset = $3)
+              AND p.status = 'open' AND p.qty > 0
+            """,
+            venue,
+            like_pattern or "_NEVER_",
+            exact or "_NEVER_",
+        )
+        return float(row["exposure"]) if row else 0.0
+
     async def insert_intent(
         self,
         *,

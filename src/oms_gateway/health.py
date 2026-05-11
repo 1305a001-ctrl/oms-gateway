@@ -37,8 +37,11 @@ async def _health(_request: web.Request) -> web.Response:
 
 
 async def serve() -> None:
+    from oms_gateway.metrics import metrics_handler  # noqa: PLC0415 (lazy import)
+
     app = web.Application()
     app.router.add_get("/health", _health)
+    app.router.add_get("/metrics", metrics_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", settings.health_port)  # noqa: S104
