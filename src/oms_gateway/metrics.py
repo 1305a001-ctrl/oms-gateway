@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable
 from dataclasses import dataclass, field
 
 from aiohttp import web
@@ -91,7 +90,9 @@ def render_metrics(snap: _Snapshot) -> str:
 
     # Cluster gauges
     cluster_cap = settings.cluster_exposure_pct_cap / 100.0 * settings.paper_account_equity_usd
-    lines.append("# HELP oms_cluster_open_exposure_usd Current open notional per (venue, underlying) cluster")
+    lines.append(
+        "# HELP oms_cluster_open_exposure_usd Current open notional per (venue, underlying) cluster"
+    )
     lines.append("# TYPE oms_cluster_open_exposure_usd gauge")
     for cluster in sorted(snap.by_cluster):
         v = snap.by_cluster[cluster]

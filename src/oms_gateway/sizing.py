@@ -12,6 +12,16 @@ Priority (highest to lowest):
 
 The min of (alpha hint, resolved cap) is taken so a strategy can never
 exceed its allowance.
+
+Phase 3.0 (2026-05-15) — Liquidity Pulse multiplier:
+  After confidence scaling, the result is multiplied by the LP risk
+  multiplier (`lp_multiplier` param, defaults to 1.0 = no scaling).
+  Callers fetch the multiplier from `lp_multiplier.fetch_multiplier`
+  before invoking this function. When LP detects elevated spread
+  velocity on the alpha's asset, the multiplier drops below 1.0 and
+  this function returns a SMALLER notional — automatic risk-down.
+  Unknown / non-LP-tracked assets (stocks, forex, etc.) receive
+  lp_multiplier=1.0 → unchanged behavior.
 """
 from typing import Any
 
@@ -70,6 +80,7 @@ def compute_notional(
     alpha_metadata: dict[str, Any],
     confidence: float,
     asset: str | None = None,
+    lp_multiplier: float = 1.0,
 ) -> float:
     """Return the order's notional USD.
 
@@ -78,6 +89,10 @@ def compute_notional(
         alpha_metadata: Alpha.metadata. May contain 'suggested_notional_usd'.
         confidence: alpha.confidence (0..1). Sub-conviction sizes scale linearly.
         asset: Alpha.asset (e.g. 'BTC-USDT', 'NVDA'). Enables per-symbol override.
+        lp_multiplier: Liquidity Pulse risk multiplier in [0.5, 2.0].
+                       Default 1.0 (no scaling). Callers fetch via
+                       `lp_multiplier.fetch_multiplier` before invocation.
+                       LP-untracked assets default to 1.0.
 
     Returns:
         notional in USD, always > 0.
@@ -97,6 +112,12 @@ def compute_notional(
     # Floor at 25% of bucket cap so we don't put on dust trades.
     confidence = max(0.0, min(1.0, confidence))
     scaled = proposed * max(0.25, confidence)
+
+    # LP multiplier scales AFTER the confidence floor so a real shock can
+    # take the order below the 25%-of-bucket dust floor — that's the whole
+    # point of dynamic risk filtering. Clamp to [0.5, 2.0] for safety.
+    lp = max(0.5, min(2.0, lp_multiplier))
+    scaled *= lp
 
     return round(scaled, 2)
 

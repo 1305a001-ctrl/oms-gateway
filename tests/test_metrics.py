@@ -1,7 +1,7 @@
 """Tests for the Prometheus exposition output of the cluster-exposure gauges."""
 from __future__ import annotations
 
-from oms_gateway.metrics import _Snapshot, _escape_label, render_metrics
+from oms_gateway.metrics import _escape_label, _Snapshot, render_metrics
 
 
 def test_escape_label_handles_quotes_and_backslashes():
@@ -71,7 +71,7 @@ def test_render_emits_cluster_cap_as_single_value():
     snap = _Snapshot()
     out = render_metrics(snap)
     # Cluster cap is global, not per-cluster.
-    lines = [l for l in out.splitlines() if l.startswith("oms_cluster_exposure_cap_usd")]
+    lines = [line for line in out.splitlines() if line.startswith("oms_cluster_exposure_cap_usd")]
     assert len(lines) == 1
     # Default 8% × $10000.
     assert "800.00" in lines[0]

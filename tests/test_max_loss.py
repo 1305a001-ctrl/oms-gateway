@@ -8,7 +8,6 @@ from oms_gateway.max_loss import (
     max_loss_for_short_prediction,
 )
 
-
 # Pure max-loss math
 
 

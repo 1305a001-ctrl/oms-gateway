@@ -13,6 +13,7 @@ import structlog
 from signals_contract.alpha import Alpha
 
 from oms_gateway.db import db
+from oms_gateway.lp_multiplier import fetch_multiplier as fetch_lp_multiplier
 from oms_gateway.preflight import (
     ExistingPosition,
     cluster_for,
@@ -102,6 +103,17 @@ async def _route_one(alpha: Alpha) -> None:
     # check can evaluate whether this trade would push the existing
     # position past its bucket cap. Sizing is pure / cheap; recomputed in
     # the accept branch below as the source of truth.
+    #
+    # Phase 3.0 (2026-05-15) — Liquidity Pulse internal risk filter:
+    # fetch the LP multiplier from local Redis and pass into sizing so a
+    # widening-spread shock on the alpha's asset automatically scales the
+    # order DOWN. LP-untracked assets (stocks, forex) get 1.0 = unchanged.
+    # Failures default to 1.0 — never amplify on missing data.
+    lp_mult = (
+        1.0
+        if alpha.direction == "flat"
+        else await fetch_lp_multiplier(r(), alpha.asset)
+    )
     proposed_notional = (
         None
         if alpha.direction == "flat"
@@ -110,6 +122,7 @@ async def _route_one(alpha: Alpha) -> None:
             alpha_metadata=alpha.metadata,
             confidence=alpha.confidence,
             asset=alpha.asset,
+            lp_multiplier=lp_mult,
         )
     )
 
@@ -182,6 +195,7 @@ async def _route_one(alpha: Alpha) -> None:
         "alpha_reasoning": alpha.reasoning,
         "bucket": bucket,
         "cluster": cluster,
+        "lp_multiplier": lp_mult,    # Phase 3.0 — for forensic auditing
         "preflight_decision": {
             "accept": decision.accept,
             "reason": decision.reason,
