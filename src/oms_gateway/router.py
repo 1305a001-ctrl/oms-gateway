@@ -114,6 +114,15 @@ async def _route_one(alpha: Alpha) -> None:
         if alpha.direction == "flat"
         else await fetch_lp_multiplier(r(), alpha.asset)
     )
+    # Phase 3.2 — fetch strategy_exposure BEFORE sizing so the notional
+    # respects the per-strategy budget cap (sizing.py applies the cap).
+    # Was: preflight rejected 100% of intents that sized past the cap;
+    # now sizing pre-caps and preflight is a defensive backstop only.
+    strategy_exposure_for_sizing = (
+        0.0
+        if (alpha.direction == "flat" or not strategy_slug)
+        else await db.strategy_open_exposure_usd(strategy_slug)
+    )
     proposed_notional = (
         None
         if alpha.direction == "flat"
@@ -123,6 +132,8 @@ async def _route_one(alpha: Alpha) -> None:
             confidence=alpha.confidence,
             asset=alpha.asset,
             lp_multiplier=lp_mult,
+            strategy_slug=strategy_slug,
+            strategy_open_exposure_usd=strategy_exposure_for_sizing,
         )
     )
 
@@ -162,10 +173,16 @@ async def _route_one(alpha: Alpha) -> None:
         else 0.0
     )
 
-    # Phase 3.1 — per-strategy budget: total open notional for this slug
+    # Phase 3.1 — per-strategy budget: reuse the exposure already fetched
+    # for sizing (above). When direction=='flat' (no sizing path), fetch now
+    # so the preflight strategy_halt + budget checks still see real exposure.
     strategy_exposure = (
-        await db.strategy_open_exposure_usd(strategy_slug)
-        if strategy_slug else 0.0
+        strategy_exposure_for_sizing
+        if alpha.direction != "flat"
+        else (
+            await db.strategy_open_exposure_usd(strategy_slug)
+            if strategy_slug else 0.0
+        )
     )
 
     decision = evaluate(

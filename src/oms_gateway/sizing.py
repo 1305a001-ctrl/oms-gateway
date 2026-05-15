@@ -74,6 +74,25 @@ def _resolve_bucket_pct(*, asset: str | None, bucket: str | None) -> float:
     )
 
 
+def _strategy_budget_cap_usd(strategy_slug: str | None) -> float | None:
+    """Pure: resolve the per-strategy budget cap (override first, default fallback).
+
+    Mirrors `preflight._would_breach_strategy_budget` lookup so sizing
+    pre-caps at the same threshold the preflight check enforces.
+    Returns None when no cap is configured (sizing is unconstrained).
+    """
+    if not strategy_slug:
+        return None
+    from oms_gateway.preflight import _parse_strategy_caps
+    overrides = _parse_strategy_caps(settings.strategy_budget_overrides)
+    cap = overrides.get(strategy_slug)
+    if cap is None and settings.default_strategy_budget_usd > 0:
+        cap = settings.default_strategy_budget_usd
+    if cap is None or cap <= 0:
+        return None
+    return cap
+
+
 def compute_notional(
     *,
     bucket: str | None,
@@ -81,6 +100,8 @@ def compute_notional(
     confidence: float,
     asset: str | None = None,
     lp_multiplier: float = 1.0,
+    strategy_slug: str | None = None,
+    strategy_open_exposure_usd: float = 0.0,
 ) -> float:
     """Return the order's notional USD.
 
@@ -93,9 +114,18 @@ def compute_notional(
                        Default 1.0 (no scaling). Callers fetch via
                        `lp_multiplier.fetch_multiplier` before invocation.
                        LP-untracked assets default to 1.0.
+        strategy_slug: when set, the result is capped at the per-strategy
+                       budget's remaining headroom (cap - existing exposure).
+                       Prevents the preflight strategy_budget check from
+                       waste-rejecting trades that could have just been sized
+                       smaller instead.
+        strategy_open_exposure_usd: caller-fetched open exposure for the
+                       strategy (from db.strategy_open_exposure_usd). Default
+                       0.0 = no existing positions.
 
     Returns:
-        notional in USD, always > 0.
+        notional in USD, always >= 0. May be 0.0 if the strategy is already
+        at its budget cap (caller should treat 0 as "skip this trade").
     """
     equity = settings.paper_account_equity_usd
 
@@ -118,6 +148,15 @@ def compute_notional(
     # point of dynamic risk filtering. Clamp to [0.5, 2.0] for safety.
     lp = max(0.5, min(2.0, lp_multiplier))
     scaled *= lp
+
+    # Phase 3.2 — cap at remaining per-strategy budget headroom.
+    # The preflight strategy_budget check still runs as a defensive
+    # backstop; here we ensure sizing doesn't propose what preflight
+    # would reject, eliminating the rejection-spam path.
+    cap = _strategy_budget_cap_usd(strategy_slug)
+    if cap is not None:
+        remaining = max(0.0, cap - strategy_open_exposure_usd)
+        scaled = min(scaled, remaining)
 
     return round(scaled, 2)
 
