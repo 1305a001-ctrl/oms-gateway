@@ -131,3 +131,110 @@ def test_derive_venue_predictions():
 
 def test_derive_venue_forex():
     assert derive_venue("forex", "EUR/USD") == "oanda"
+
+
+# ─── Phase 3.2 — per-strategy budget cap on sizing ─────────────────
+
+
+def test_strategy_slug_unset_no_cap_applied():
+    """Without a strategy_slug, sizing is uncapped (back-compat)."""
+    notional = compute_notional(
+        bucket="conviction",
+        alpha_metadata={},
+        confidence=1.0,
+    )
+    assert notional == 500.0  # 5% × $10k unchanged
+
+
+def test_strategy_default_budget_caps_sizing(monkeypatch):
+    """default_strategy_budget_usd=200 caps a $500-notional conviction trade
+    when caller provides a strategy_slug and there is no existing exposure."""
+    from oms_gateway.settings import settings
+    monkeypatch.setattr(settings, "default_strategy_budget_usd", 200.0)
+    monkeypatch.setattr(settings, "strategy_budget_overrides", "")
+    notional = compute_notional(
+        bucket="conviction",
+        alpha_metadata={},
+        confidence=1.0,
+        strategy_slug="some-strategy",
+        strategy_open_exposure_usd=0.0,
+    )
+    assert notional == 200.0
+
+
+def test_strategy_override_caps_sizing(monkeypatch):
+    """Per-strategy override beats the default."""
+    from oms_gateway.settings import settings
+    monkeypatch.setattr(settings, "default_strategy_budget_usd", 200.0)
+    monkeypatch.setattr(
+        settings, "strategy_budget_overrides",
+        "some-strategy=350,other-strategy=900",
+    )
+    notional = compute_notional(
+        bucket="conviction",
+        alpha_metadata={},
+        confidence=1.0,
+        strategy_slug="some-strategy",
+        strategy_open_exposure_usd=0.0,
+    )
+    assert notional == 350.0
+
+
+def test_strategy_existing_exposure_reduces_remaining(monkeypatch):
+    """Open positions consume the budget — remaining headroom shrinks."""
+    from oms_gateway.settings import settings
+    monkeypatch.setattr(settings, "default_strategy_budget_usd", 200.0)
+    monkeypatch.setattr(settings, "strategy_budget_overrides", "")
+    notional = compute_notional(
+        bucket="conviction",
+        alpha_metadata={},
+        confidence=1.0,
+        strategy_slug="some-strategy",
+        strategy_open_exposure_usd=120.0,
+    )
+    assert notional == 80.0  # 200 cap - 120 existing = 80 remaining
+
+
+def test_strategy_fully_consumed_budget_returns_zero(monkeypatch):
+    """When existing exposure >= cap, sizing returns 0 (caller skips)."""
+    from oms_gateway.settings import settings
+    monkeypatch.setattr(settings, "default_strategy_budget_usd", 200.0)
+    monkeypatch.setattr(settings, "strategy_budget_overrides", "")
+    notional = compute_notional(
+        bucket="conviction",
+        alpha_metadata={},
+        confidence=1.0,
+        strategy_slug="some-strategy",
+        strategy_open_exposure_usd=250.0,
+    )
+    assert notional == 0.0
+
+
+def test_strategy_cap_above_bucket_scaled_size_no_op(monkeypatch):
+    """If the budget cap exceeds bucket-scaled size, no cap applied."""
+    from oms_gateway.settings import settings
+    monkeypatch.setattr(settings, "default_strategy_budget_usd", 10_000.0)
+    monkeypatch.setattr(settings, "strategy_budget_overrides", "")
+    notional = compute_notional(
+        bucket="conviction",
+        alpha_metadata={},
+        confidence=1.0,
+        strategy_slug="some-strategy",
+        strategy_open_exposure_usd=0.0,
+    )
+    assert notional == 500.0  # bucket size unchanged, well below $10k cap
+
+
+def test_strategy_zero_budget_skips_cap(monkeypatch):
+    """default_strategy_budget_usd=0 → cap check disabled."""
+    from oms_gateway.settings import settings
+    monkeypatch.setattr(settings, "default_strategy_budget_usd", 0.0)
+    monkeypatch.setattr(settings, "strategy_budget_overrides", "")
+    notional = compute_notional(
+        bucket="conviction",
+        alpha_metadata={},
+        confidence=1.0,
+        strategy_slug="some-strategy",
+        strategy_open_exposure_usd=0.0,
+    )
+    assert notional == 500.0  # cap not enforced
