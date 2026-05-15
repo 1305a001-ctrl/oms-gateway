@@ -200,6 +200,23 @@ async def _route_one(alpha: Alpha) -> None:
         strategy_open_exposure_usd=strategy_exposure,
     )
 
+    # Phase 3.2 follow-up — when sizing returned 0 (cap saturated), skip the
+    # INSERT entirely. Was: 0-notional intents got queued, then the adapter
+    # rejected them downstream — wasted DB rows + rate-limit spam without
+    # any chance of trading.
+    if (
+        decision.accept
+        and alpha.direction != "flat"
+        and (proposed_notional is None or proposed_notional <= 0)
+    ):
+        log.info(
+            "intent.skipped_zero_notional",
+            alpha_id=str(alpha.id),
+            strategy_slug=strategy_slug,
+            strategy_open_exposure_usd=strategy_exposure,
+        )
+        return
+
     if decision.accept and alpha.direction == "flat":
         side = "close"
         notional = None
