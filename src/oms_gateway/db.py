@@ -87,6 +87,28 @@ class DB:
             return None
         return row["bucket"]
 
+    async def strategy_open_exposure_usd(self, strategy_slug: str) -> float:
+        """Sum mark-priced open notional for a single strategy slug.
+
+        Falls back to avg_entry_price when mark_price is NULL.
+        Returns 0.0 when the strategy has no open positions.
+        """
+        if not strategy_slug:
+            return 0.0
+        row = await self.pool.fetchrow(
+            """
+            SELECT COALESCE(SUM(
+              p.qty * COALESCE(p.mark_price, p.avg_entry_price)
+            ), 0)::float AS exposure
+            FROM positions p
+            JOIN strategies s ON s.id = p.strategy_id
+            WHERE s.slug = $1
+              AND p.status = 'open' AND p.qty > 0
+            """,
+            strategy_slug,
+        )
+        return float(row["exposure"]) if row else 0.0
+
     async def bucket_open_exposure_usd(self, bucket: str) -> float:
         """Sum mark-priced open notional across all strategies sharing
         `frontmatter->>'bucket' = $1`. Falls back to avg_entry_price when

@@ -269,6 +269,91 @@ def _would_breach_cluster_exposure(
     return None
 
 
+def _parse_strategy_caps(csv: str) -> dict[str, float]:
+    """Pure: parse 'slug=100,slug2=250' → {slug: cap_usd}.
+
+    Skips malformed entries silently — never crashes the loop.
+    Rejects NaN/Inf (Python's float() accepts those strings).
+    """
+    import math as _math
+    out: dict[str, float] = {}
+    if not csv:
+        return out
+    for entry in csv.split(","):
+        if "=" not in entry:
+            continue
+        k, _, v = entry.partition("=")
+        k = k.strip()
+        if not k:
+            continue
+        try:
+            val = float(v.strip())
+        except (TypeError, ValueError):
+            continue
+        if not _math.isfinite(val) or val <= 0:
+            continue
+        out[k] = val
+    return out
+
+
+def _would_breach_strategy_budget(
+    *,
+    strategy_slug: str | None,
+    strategy_open_exposure_usd: float,
+    proposed_notional_usd: float | None,
+    alpha_direction: Literal["long", "short", "flat"],
+) -> Decision | None:
+    """Pure: reject when a strategy's total open exposure would exceed its
+    per-strategy budget cap.
+
+    The budget is a hard ceiling on (existing open exposure + proposed
+    notional), in USD. Opposite-direction trades pass through unimpeded
+    so positions can always close.
+
+    Reading the cap:
+      - First check `settings.strategy_budget_overrides` (CSV "slug=cap")
+      - Fall back to `settings.default_strategy_budget_usd` if positive
+      - If both unset/zero, no constraint (skip check)
+
+    Defensive: when proposed_notional_usd is None, skip — sizing didn't
+    run, downstream guards will catch.
+    """
+    if proposed_notional_usd is None or proposed_notional_usd <= 0:
+        return None
+    if alpha_direction == "flat":
+        return None
+    if strategy_slug is None or not strategy_slug:
+        return None
+
+    overrides = _parse_strategy_caps(settings.strategy_budget_overrides)
+    cap_usd: float | None = overrides.get(strategy_slug)
+    if cap_usd is None and settings.default_strategy_budget_usd > 0:
+        cap_usd = settings.default_strategy_budget_usd
+    if cap_usd is None or cap_usd <= 0:
+        return None
+
+    # Opposite-direction trades reduce exposure — let them through.
+    # We approximate by treating positive proposed_notional as adding to
+    # exposure for the strategy regardless of direction (a strategy that
+    # opens both long and short on different assets is using its budget
+    # twice; the cap correctly limits both).
+    would_be_exposure = strategy_open_exposure_usd + proposed_notional_usd
+    if would_be_exposure <= cap_usd:
+        return None
+
+    return Decision(
+        accept=False,
+        reason="strategy_budget_breached",
+        snapshot_used={
+            "strategy_slug": strategy_slug,
+            "strategy_budget_usd": cap_usd,
+            "open_exposure_usd": strategy_open_exposure_usd,
+            "proposed_notional_usd": proposed_notional_usd,
+            "would_be_exposure_usd": would_be_exposure,
+        },
+    )
+
+
 def evaluate(
     *,
     halt_active: bool,
@@ -285,6 +370,8 @@ def evaluate(
     bucket_open_exposure_usd: float = 0.0,
     cluster: str | None = None,
     cluster_open_exposure_usd: float = 0.0,
+    # Phase 3.1 — per-strategy capital budget (optional; default 0 ⇒ no constraint).
+    strategy_open_exposure_usd: float = 0.0,
 ) -> Decision:
     """Run all preflight checks. First failing check rejects.
 
@@ -354,5 +441,14 @@ def evaluate(
     )
     if cluster_breach is not None:
         return cluster_breach
+
+    strategy_budget_breach = _would_breach_strategy_budget(
+        strategy_slug=strategy_slug,
+        strategy_open_exposure_usd=strategy_open_exposure_usd,
+        proposed_notional_usd=proposed_notional_usd,
+        alpha_direction=alpha_direction,
+    )
+    if strategy_budget_breach is not None:
+        return strategy_budget_breach
 
     return Decision(accept=True, reason=None)

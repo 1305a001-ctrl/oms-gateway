@@ -65,6 +65,22 @@ class Settings(BaseSettings):
     # threshold-ladder strategies while still bounding correlated exposure.
     cluster_exposure_pct_cap: float = 8.0
 
+    # --- Phase 3.1 — per-strategy capital budget ---
+    # Hard ceiling on (existing open exposure + proposed notional) per
+    # strategy, in USD. Prevents any one strategy from over-allocating
+    # the bank-roll. Especially important with 20+ active strategies
+    # where buckets + clusters alone don't isolate spend per slug.
+    #
+    # default_strategy_budget_usd applies to every strategy not in the
+    # overrides map. Set 0 to disable the default (only overridden
+    # strategies are capped).
+    #
+    # overrides format: "slug=usd_cap,slug2=usd_cap2"
+    # Example:
+    #   POLY-SELL-WINGS=500,POLY-PREMARKET-TOP-TAKER=300,POLY-PUBLISHER-TAKER=200
+    default_strategy_budget_usd: float = 200.0
+    strategy_budget_overrides: str = ""
+
     # Halt keys (must match pa-agent + risk-watcher)
     halt_key: str = "system:halt"
     halt_strategy_prefix: str = "system:halt:strategy:"

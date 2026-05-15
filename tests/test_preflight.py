@@ -126,3 +126,133 @@ def test_halt_takes_priority_over_dd():
         risk_snapshots={"daily": _snapshot("daily", 99.0)},
     )
     assert decision.reason == "system_halted"
+
+
+# ─── Phase 3.1 — per-strategy capital budget ──────────────────────
+
+
+def test_parse_strategy_caps_basic():
+    from oms_gateway.preflight import _parse_strategy_caps
+    assert _parse_strategy_caps("poly-sell-wings=500,poly-publisher-taker=200") == {
+        "poly-sell-wings": 500.0,
+        "poly-publisher-taker": 200.0,
+    }
+
+
+def test_parse_strategy_caps_handles_garbage():
+    from oms_gateway.preflight import _parse_strategy_caps
+    assert _parse_strategy_caps("") == {}
+    assert _parse_strategy_caps("only-key=,empty-val") == {}
+    assert _parse_strategy_caps("=100,valid=50") == {"valid": 50.0}
+    assert _parse_strategy_caps("malformed,valid=50,k=NaN") == {"valid": 50.0}
+
+
+def test_strategy_budget_default_cap_applied(monkeypatch):
+    """Default cap rejects when (existing + proposed) exceeds it."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "default_strategy_budget_usd", 100.0)
+    monkeypatch.setattr(s.settings, "strategy_budget_overrides", "")
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-sell-wings",
+        risk_snapshots={},
+        proposed_notional_usd=60.0,
+        strategy_open_exposure_usd=50.0,
+        alpha_direction="long",
+    )
+    assert not d.accept
+    assert d.reason == "strategy_budget_breached"
+    assert d.snapshot_used["strategy_budget_usd"] == 100.0
+    assert d.snapshot_used["would_be_exposure_usd"] == 110.0
+
+
+def test_strategy_budget_within_cap_passes(monkeypatch):
+    """Under the cap → accept."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "default_strategy_budget_usd", 100.0)
+    monkeypatch.setattr(s.settings, "strategy_budget_overrides", "")
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-sell-wings",
+        risk_snapshots={},
+        proposed_notional_usd=30.0,
+        strategy_open_exposure_usd=50.0,
+        alpha_direction="long",
+    )
+    assert d.accept
+
+
+def test_strategy_budget_override_wins(monkeypatch):
+    """Per-strategy override beats the default."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "default_strategy_budget_usd", 100.0)
+    monkeypatch.setattr(
+        s.settings, "strategy_budget_overrides",
+        "poly-sell-wings=500,poly-publisher-taker=200",
+    )
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-sell-wings",
+        risk_snapshots={},
+        proposed_notional_usd=60.0,
+        strategy_open_exposure_usd=50.0,
+        alpha_direction="long",
+    )
+    assert d.accept
+    d2 = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-publisher-taker",
+        risk_snapshots={},
+        proposed_notional_usd=60.0,
+        strategy_open_exposure_usd=150.0,
+        alpha_direction="long",
+    )
+    assert not d2.accept
+    assert d2.reason == "strategy_budget_breached"
+
+
+def test_strategy_budget_zero_default_disables(monkeypatch):
+    """default=0 + no override = budget check never rejects."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "default_strategy_budget_usd", 0.0)
+    monkeypatch.setattr(s.settings, "strategy_budget_overrides", "")
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="any-strategy",
+        risk_snapshots={},
+        proposed_notional_usd=50.0,
+        strategy_open_exposure_usd=200.0,
+        alpha_direction="long",
+    )
+    # Even though strategy_open_exposure is large, budget=0 disables the check
+    assert d.reason != "strategy_budget_breached"
+
+
+def test_strategy_budget_skipped_when_no_slug(monkeypatch):
+    """No slug → can't enforce per-strategy budget; budget check never rejects."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "default_strategy_budget_usd", 100.0)
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug=None,
+        risk_snapshots={},
+        proposed_notional_usd=50.0,
+        strategy_open_exposure_usd=200.0,    # would breach if slug were set
+        alpha_direction="long",
+    )
+    assert d.reason != "strategy_budget_breached"
+
+
+def test_strategy_budget_skipped_when_flat(monkeypatch):
+    """alpha.direction='flat' → budget check never rejects (close path)."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "default_strategy_budget_usd", 100.0)
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="any-strategy",
+        risk_snapshots={},
+        proposed_notional_usd=50.0,
+        strategy_open_exposure_usd=200.0,
+        alpha_direction="flat",
+    )
+    assert d.reason != "strategy_budget_breached"
