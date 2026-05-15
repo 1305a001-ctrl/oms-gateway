@@ -162,6 +162,12 @@ async def _route_one(alpha: Alpha) -> None:
         else 0.0
     )
 
+    # Phase 3.1 — per-strategy budget: total open notional for this slug
+    strategy_exposure = (
+        await db.strategy_open_exposure_usd(strategy_slug)
+        if strategy_slug else 0.0
+    )
+
     decision = evaluate(
         halt_active=sys_halt,
         strategy_halt_active=strat_halt,
@@ -174,6 +180,7 @@ async def _route_one(alpha: Alpha) -> None:
         bucket_open_exposure_usd=bucket_exposure,
         cluster=cluster,
         cluster_open_exposure_usd=cluster_exposure,
+        strategy_open_exposure_usd=strategy_exposure,
     )
 
     if decision.accept and alpha.direction == "flat":
