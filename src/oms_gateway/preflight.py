@@ -17,6 +17,7 @@ lookup) and feeds them in, which keeps preflight unit-testable.
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from oms_gateway.bankroll_aware_sizing import effective_strategy_budget
 from oms_gateway.settings import settings
 
 
@@ -302,6 +303,7 @@ def _would_breach_strategy_budget(
     strategy_open_exposure_usd: float,
     proposed_notional_usd: float | None,
     alpha_direction: Literal["long", "short", "flat"],
+    bankroll_state: dict | None = None,
 ) -> Decision | None:
     """Pure: reject when a strategy's total open exposure would exceed its
     per-strategy budget cap.
@@ -327,8 +329,17 @@ def _would_breach_strategy_budget(
 
     overrides = _parse_strategy_caps(settings.strategy_budget_overrides)
     cap_usd: float | None = overrides.get(strategy_slug)
-    if cap_usd is None and settings.default_strategy_budget_usd > 0:
-        cap_usd = settings.default_strategy_budget_usd
+    # Bankroll-aware tier OVERRIDES the static default cap. Overrides
+    # still win (operator can pin a slug to a specific cap regardless
+    # of tier). The tier-derived cap only applies when bankroll-aware
+    # sizing is enabled AND the cached state is fresh; falls back to
+    # the static default otherwise.
+    if cap_usd is None:
+        tiered_cap = effective_strategy_budget(bankroll_state)
+        if tiered_cap is not None and tiered_cap > 0:
+            cap_usd = tiered_cap
+        elif settings.default_strategy_budget_usd > 0:
+            cap_usd = settings.default_strategy_budget_usd
     if cap_usd is None or cap_usd <= 0:
         return None
 
@@ -372,6 +383,8 @@ def evaluate(
     cluster_open_exposure_usd: float = 0.0,
     # Phase 3.1 — per-strategy capital budget (optional; default 0 ⇒ no constraint).
     strategy_open_exposure_usd: float = 0.0,
+    # 2026-05-17 — tier-aware sizing state (None = use static cap from settings).
+    bankroll_state: dict[str, Any] | None = None,
 ) -> Decision:
     """Run all preflight checks. First failing check rejects.
 
@@ -447,6 +460,7 @@ def evaluate(
         strategy_open_exposure_usd=strategy_open_exposure_usd,
         proposed_notional_usd=proposed_notional_usd,
         alpha_direction=alpha_direction,
+        bankroll_state=bankroll_state,
     )
     if strategy_budget_breach is not None:
         return strategy_budget_breach
