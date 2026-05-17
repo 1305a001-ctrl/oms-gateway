@@ -81,6 +81,20 @@ class Settings(BaseSettings):
     default_strategy_budget_usd: float = 200.0
     strategy_budget_overrides: str = ""
 
+    # --- Bankroll-aware sizing (2026-05-17) ---
+    # When True, per-strategy budget + per-order notional caps SCALE with
+    # realized PnL using the tier ladder in bankroll_aware_sizing.py.
+    # Default OFF — preserves current static-cap behavior.
+    #
+    # Ladder design: $500 start → T0 caps ($200/$50) → T1 ($400/$100) at
+    # +$500 realized → T2 ($600/$150) at +$1500 → ... → T6 ($5000/$1200)
+    # at +$25k. Caps RATCHET (revert to lower tier if PnL drops).
+    bankroll_aware_sizing_enabled: bool = False
+    # Refresher loop cadence (writes to Redis every N seconds).
+    bankroll_refresh_interval_sec: int = 60
+    # Initial seed capital for bankroll math. Realized PnL is added to this.
+    bankroll_seed_capital_usd: float = 500.0
+
     # Halt keys (must match pa-agent + risk-watcher)
     halt_key: str = "system:halt"
     halt_strategy_prefix: str = "system:halt:strategy:"
