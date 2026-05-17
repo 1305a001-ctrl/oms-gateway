@@ -95,6 +95,23 @@ class Settings(BaseSettings):
     # Initial seed capital for bankroll math. Realized PnL is added to this.
     bankroll_seed_capital_usd: float = 500.0
 
+    # Aggressive bankroll ladder — 2x trade size, 2x strategy budget per tier.
+    # Operator flips True AFTER:
+    #   - 60+ live closed trades validate edge
+    #   - Realized Sharpe ≥ 1.5 over 30 days
+    #   - Max single-day drawdown < 8% of bankroll
+    aggressive_bankroll_ladder: bool = False
+
+    # --- Kelly capital allocator (2026-05-17) ---
+    # Per-strategy budget multiplier based on rolling-Sharpe-weighted
+    # Kelly fraction. Applied on top of tier budget; clamps to [floor, ceiling]
+    # to protect against bad estimates.
+    kelly_allocator_enabled: bool = False
+    kelly_refresh_interval_sec: int = 600
+    kelly_discount: float = 0.25         # quarter Kelly
+    kelly_floor_multiplier: float = 0.25
+    kelly_ceiling_multiplier: float = 3.0
+
     # Halt keys (must match pa-agent + risk-watcher)
     halt_key: str = "system:halt"
     halt_strategy_prefix: str = "system:halt:strategy:"

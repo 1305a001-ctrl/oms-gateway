@@ -5,7 +5,7 @@ import signal
 
 import structlog
 
-from oms_gateway import health, metrics, router
+from oms_gateway import bankroll_refresher, health, metrics, router
 from oms_gateway.db import db
 from oms_gateway.redis_client import close as close_redis
 from oms_gateway.settings import settings
@@ -38,6 +38,12 @@ async def _run() -> None:
         asyncio.create_task(health.serve(), name="health"),
         asyncio.create_task(metrics.refresh_loop(), name="metrics-refresh"),
     ]
+    if settings.bankroll_aware_sizing_enabled:
+        tasks.append(asyncio.create_task(
+            bankroll_refresher.run_loop(db.pool),
+            name="bankroll-refresher",
+        ))
+        log.info("bankroll_refresher.scheduled")
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()

@@ -58,18 +58,46 @@ class BankrollTier:
     label: str  # for log/UI
 
 
-# Default ladder — designed for $500 starting capital, conservative ramp.
-# Operator can override the whole ladder via env (TODO: ladder serializer).
-# Each tier doubles trade size after ~3-5x the prior tier's profit budget.
-DEFAULT_LADDER: tuple[BankrollTier, ...] = (
+# Conservative ladder — default for $500 seed.
+# Each tier ~doubles trade size after 3-5x the prior tier's profit budget.
+CONSERVATIVE_LADDER: tuple[BankrollTier, ...] = (
     BankrollTier(    0.0,   200.0,    50.0, "T0_seed"),       # $500 start
-    BankrollTier(  500.0,   400.0,   100.0, "T1_first_profit"),  # +$500 realized
-    BankrollTier( 1500.0,   600.0,   150.0, "T2_proven"),      # +$1500
-    BankrollTier( 3000.0,   900.0,   225.0, "T3_compound"),    # +$3000
-    BankrollTier( 6000.0,  1500.0,   400.0, "T4_scale"),       # +$6000
-    BankrollTier(12000.0,  2500.0,   650.0, "T5_mid"),         # +$12k
-    BankrollTier(25000.0,  5000.0,  1200.0, "T6_top"),         # +$25k
+    BankrollTier(  500.0,   400.0,   100.0, "T1_first_profit"),
+    BankrollTier( 1500.0,   600.0,   150.0, "T2_proven"),
+    BankrollTier( 3000.0,   900.0,   225.0, "T3_compound"),
+    BankrollTier( 6000.0,  1500.0,   400.0, "T4_scale"),
+    BankrollTier(12000.0,  2500.0,   650.0, "T5_mid"),
+    BankrollTier(25000.0,  5000.0,  1200.0, "T6_top"),
 )
+
+
+# Aggressive ladder — 2x trade size, 2x strategy budget. Only flip via
+# settings.aggressive_bankroll_ladder=True AFTER:
+#   - 60+ live closed trades validate the edge
+#   - Realized Sharpe ≥ 1.5 over 30 days
+#   - Max single-day drawdown < 8% of bankroll
+# These thresholds are tracked in pa-agent's /me view; operator confirms
+# before flipping.
+AGGRESSIVE_LADDER: tuple[BankrollTier, ...] = (
+    BankrollTier(    0.0,   400.0,   100.0, "T0_agg_seed"),
+    BankrollTier(  500.0,   800.0,   200.0, "T1_agg_first_profit"),
+    BankrollTier( 1500.0,  1200.0,   300.0, "T2_agg_proven"),
+    BankrollTier( 3000.0,  1800.0,   450.0, "T3_agg_compound"),
+    BankrollTier( 6000.0,  3000.0,   800.0, "T4_agg_scale"),
+    BankrollTier(12000.0,  5000.0,  1300.0, "T5_agg_mid"),
+    BankrollTier(25000.0, 10000.0,  2400.0, "T6_agg_top"),
+)
+
+
+def active_ladder() -> tuple[BankrollTier, ...]:
+    """Pure: which ladder is in effect based on settings flag."""
+    if settings.aggressive_bankroll_ladder:
+        return AGGRESSIVE_LADDER
+    return CONSERVATIVE_LADDER
+
+
+# Back-compat alias — old callers reference DEFAULT_LADDER directly.
+DEFAULT_LADDER = CONSERVATIVE_LADDER
 
 
 # Redis key — single key, JSON value with tier label + caps + bankroll
@@ -85,13 +113,18 @@ BANKROLL_STATE_TTL_SEC = 600
 def select_tier(
     realized_pnl_usd: float,
     *,
-    ladder: tuple[BankrollTier, ...] = DEFAULT_LADDER,
+    ladder: tuple[BankrollTier, ...] | None = None,
 ) -> BankrollTier:
     """Pure: pick the highest tier whose threshold ≤ realized_pnl_usd.
 
     Always returns at least the seed tier (T0). Ladder must be
     sorted ascending by pnl_threshold (we don't sort here — invariant).
+
+    When ladder=None, uses the currently-active ladder (conservative or
+    aggressive depending on settings.aggressive_bankroll_ladder).
     """
+    if ladder is None:
+        ladder = active_ladder()
     active = ladder[0]
     for tier in ladder:
         if realized_pnl_usd >= tier.pnl_threshold_usd:
@@ -186,9 +219,12 @@ def effective_order_notional(state: dict | None) -> float | None:
 
 __all__ = [
     "BankrollTier",
+    "CONSERVATIVE_LADDER",
+    "AGGRESSIVE_LADDER",
     "DEFAULT_LADDER",
     "BANKROLL_STATE_KEY",
     "BANKROLL_STATE_TTL_SEC",
+    "active_ladder",
     "select_tier",
     "to_state_payload",
     "is_state_fresh",
