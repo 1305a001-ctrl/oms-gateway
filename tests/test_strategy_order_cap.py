@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 from oms_gateway.sizing import _strategy_order_cap_usd, compute_notional
 
-
 # ─── _strategy_order_cap_usd ───────────────────────────────────────
 
 

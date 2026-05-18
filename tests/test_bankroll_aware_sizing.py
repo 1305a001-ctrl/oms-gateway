@@ -5,7 +5,6 @@ import time
 
 from oms_gateway import bankroll_aware_sizing as bas
 
-
 # ─── Tier selection ────────────────────────────────────────────────────
 
 

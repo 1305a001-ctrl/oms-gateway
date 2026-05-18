@@ -31,9 +31,8 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 import asyncpg
 
