@@ -81,6 +81,21 @@ class Settings(BaseSettings):
     default_strategy_budget_usd: float = 200.0
     strategy_budget_overrides: str = ""
 
+    # --- 2026-05-18 — per-strategy per-ORDER cap ---
+    # Caps the notional of each individual order from a strategy, independent
+    # of total-exposure budget. Lets the strategy accumulate budget via many
+    # small orders that the adapter's hard ceiling would otherwise refuse.
+    #
+    # Critical for live-mode flips. Example:
+    #   STRATEGY_ORDER_CAP_OVERRIDES=poly-publisher-taker-long=20
+    # With strategy_budget=400 and order_cap=20, the strategy can open up to
+    # 20 concurrent $20 positions (= $400 total exposure). Without this,
+    # oms-gateway sizes the first intent to $400, adapter (cap=$20) refuses.
+    #
+    # Same format as strategy_budget_overrides: "slug=usd,slug2=usd".
+    # Empty = no per-order cap (sizing follows budget + bucket caps only).
+    strategy_order_cap_overrides: str = ""
+
     # --- Bankroll-aware sizing (2026-05-17) ---
     # When True, per-strategy budget + per-order notional caps SCALE with
     # realized PnL using the tier ladder in bankroll_aware_sizing.py.
