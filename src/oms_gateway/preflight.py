@@ -57,10 +57,28 @@ def cluster_for(venue: str, asset: str) -> str:
     if not a:
         return f"{v}:?"
     if v == "polymarket":
-        # Slugs are kebab-case; first token is the underlying entity
-        # ("bitcoin", "ethereum", "microstrategy", "donald-trump-…").
-        head = a.split("-", 1)[0].lower()
-        return f"poly:{head}" if head else f"poly:{a}"
+        # Slugs are kebab-case. Naive `split("-", 1)[0]` collapses every
+        # market starting with a syntactic prefix ("will", "does", "is",
+        # "has") into one mega-bucket — confirmed live 2026-05-18 when
+        # 8473/8971 intents (94%) were rejected for `cluster_exposure_cap`
+        # on the synthetic `poly:will` cluster (44 distinct underlyings).
+        #
+        # Fix: skip leading syntactic-prefix tokens and use the first
+        # semantic token (the actual underlying). "will-bitcoin-reach-82k"
+        # → "bitcoin", not "will".
+        tokens = [t for t in a.lower().split("-") if t]
+        if not tokens:
+            return f"poly:{a}"
+        # Drop common syntactic prefixes the slug template uses.
+        _SLUG_PREFIXES = frozenset({
+            "will", "does", "is", "has", "did", "can",
+            "the", "a", "an",
+        })
+        idx = 0
+        while idx < len(tokens) - 1 and tokens[idx] in _SLUG_PREFIXES:
+            idx += 1
+        head = tokens[idx]
+        return f"poly:{head}"
     if v == "binance":
         # BTC-USDT, ETH-USDT, …  Cluster by base symbol so cross-margin
         # and isolated views collapse into one underlying.

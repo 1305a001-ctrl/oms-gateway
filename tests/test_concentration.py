@@ -25,6 +25,34 @@ def test_cluster_for_polymarket_separates_underlyings():
     )
 
 
+def test_cluster_for_polymarket_skips_will_prefix():
+    """The naive split("-", 1)[0] collapses every `will-*` market into
+    one synthetic `poly:will` bucket. Confirmed live 2026-05-18 when 44
+    distinct prediction markets all rejected on a single cluster cap."""
+    assert cluster_for("polymarket", "will-bitcoin-reach-82k-on-may-18") == "poly:bitcoin"
+    assert cluster_for("polymarket", "will-ethereum-cross-3k") == "poly:ethereum"
+    assert cluster_for("polymarket", "will-elon-tweet-by-friday") == "poly:elon"
+
+
+def test_cluster_for_polymarket_skips_other_syntactic_prefixes():
+    assert cluster_for("polymarket", "does-bitcoin-reach-100k") == "poly:bitcoin"
+    assert cluster_for("polymarket", "is-eth-above-3k-on-may-23") == "poly:eth"
+    assert cluster_for("polymarket", "has-trump-spoken-today") == "poly:trump"
+
+
+def test_cluster_for_polymarket_keeps_last_prefix_when_only_prefixes():
+    """If a slug is entirely prefix tokens, keep the last token rather
+    than returning empty."""
+    assert cluster_for("polymarket", "will") == "poly:will"
+    assert cluster_for("polymarket", "will-does") == "poly:does"
+
+
+def test_cluster_for_polymarket_passthrough_non_prefix():
+    """Pre-existing behavior preserved for slugs without prefix."""
+    assert cluster_for("polymarket", "bitcoin-above-80k") == "poly:bitcoin"
+    assert cluster_for("polymarket", "trump-wins-2028") == "poly:trump"
+
+
 def test_cluster_for_binance_groups_quote_pairs():
     assert cluster_for("binance", "BTC-USDT") == "crypto:BTC"
     assert cluster_for("binance", "BTC-USDC") == "crypto:BTC"
