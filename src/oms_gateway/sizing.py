@@ -93,6 +93,33 @@ def _strategy_budget_cap_usd(strategy_slug: str | None) -> float | None:
     return cap
 
 
+def _strategy_order_cap_usd(strategy_slug: str | None) -> float | None:
+    """Pure: per-strategy per-order cap (separate from total-exposure budget).
+
+    Use case: live-mode flips need a per-order ceiling that's independent
+    of the strategy's total-exposure budget. Example:
+      STRATEGY_ORDER_CAP_OVERRIDES=poly-publisher-taker-long=20
+    means each individual order for that slug sizes to ≤ $20 regardless
+    of the strategy's budget room or bucket cap. The strategy can still
+    accumulate up to `strategy_budget_overrides` total open exposure
+    across many $20 orders.
+
+    Returns None when no override is set (sizing is unconstrained by
+    this cap; the budget + bucket caps still apply).
+    """
+    if not strategy_slug:
+        return None
+    raw = getattr(settings, "strategy_order_cap_overrides", "")
+    if not raw:
+        return None
+    from oms_gateway.preflight import _parse_strategy_caps
+    overrides = _parse_strategy_caps(raw)
+    cap = overrides.get(strategy_slug)
+    if cap is None or cap <= 0:
+        return None
+    return cap
+
+
 def compute_notional(
     *,
     bucket: str | None,
@@ -157,6 +184,16 @@ def compute_notional(
     if cap is not None:
         remaining = max(0.0, cap - strategy_open_exposure_usd)
         scaled = min(scaled, remaining)
+
+    # 2026-05-18 — per-strategy ORDER cap (independent of budget).
+    # Lets a strategy accumulate up to its budget via many small orders,
+    # which the adapter's hard ceiling would otherwise refuse. Critical
+    # for live-mode flips where the operator wants e.g. $20/order × 20
+    # concurrent positions = $400 total. Without this, oms-gateway sizes
+    # to $400 → adapter refuses with `order.refused_ceiling`.
+    order_cap = _strategy_order_cap_usd(strategy_slug)
+    if order_cap is not None:
+        scaled = min(scaled, order_cap)
 
     return round(scaled, 2)
 
