@@ -81,6 +81,15 @@ async def _check_halts(strategy_slug: str | None) -> tuple[bool, bool]:
     return bool(sys_h), bool(strat_h)
 
 
+def _paper_strategy_set() -> set[str]:
+    """Parse PAPER_STRATEGY_SLUGS env var into a normalized set of slugs.
+
+    Read at call-time (not module-load) so tests can monkeypatch the setting
+    without re-importing. Empty/whitespace entries are filtered."""
+    raw = settings.paper_strategy_slugs or ""
+    return {s.strip() for s in raw.split(",") if s.strip()}
+
+
 def build_intent_metadata(
     *,
     alpha: Alpha,
@@ -88,14 +97,20 @@ def build_intent_metadata(
     cluster: str | None,
     lp_mult: float,
     decision,
+    strategy_slug: str | None = None,
 ) -> dict:
     """Build the intent metadata dict from alpha + preflight context.
 
     `alpha_edge_pp` is hoisted to top-level for SQL queryability; the full
     `alpha.metadata` is also preserved verbatim under `alpha_metadata` so
     future EV analyses can segment on any strategy state captured at the
-    decision boundary (spread_pp, fair_yes, time_left_s, etc.)."""
+    decision boundary (spread_pp, fair_yes, time_left_s, etc.).
+
+    `paper` is set when the alpha's strategy is in the PAPER_STRATEGY_SLUGS
+    env-var allowlist — flows through to oms-dispatcher → poly-adapter to
+    force the dry-run code path without affecting other strategies."""
     alpha_md = dict(alpha.metadata or {})
+    paper = bool(strategy_slug) and strategy_slug in _paper_strategy_set()
     return {
         "alpha_id": str(alpha.id),
         "alpha_confidence": alpha.confidence,
@@ -106,6 +121,7 @@ def build_intent_metadata(
         "bucket": bucket,
         "cluster": cluster,
         "lp_multiplier": lp_mult,    # Phase 3.0 — for forensic auditing
+        "paper": paper,
         "preflight_decision": {
             "accept": decision.accept,
             "reason": decision.reason,
@@ -306,6 +322,7 @@ async def _route_one(alpha: Alpha) -> None:
         cluster=cluster,
         lp_mult=lp_mult,
         decision=decision,
+        strategy_slug=strategy_slug,
     )
 
     intent_id = await db.insert_intent(
