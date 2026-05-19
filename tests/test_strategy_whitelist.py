@@ -7,8 +7,6 @@ budget cap, no env flag, no race condition can defeat this layer.
 """
 from datetime import UTC, datetime
 
-import pytest
-
 from oms_gateway.preflight import evaluate
 
 
