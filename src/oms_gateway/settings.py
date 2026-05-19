@@ -219,7 +219,12 @@ class Settings(BaseSettings):
         "poly-publisher-taker-gamma-ok,"
         "poly-publisher-taker-sol,"
         "poly-publisher-taker-xrp,"
-        "poly-politics-momentum"
+        "poly-politics-momentum,"
+        # 2026-05-20 — added after initial deploy showed remaining $30k of
+        # fake PnL from these strategies. Final post-fix bankroll figure:
+        # +$55.92 lifetime (chainlink_lag real wallet trades).
+        "poly-sell-wings,"
+        "poly-politics-momentum-slow"
     )
 
     # Cap-breach event stream — Phase 2.9. Whenever the bucket or cluster
