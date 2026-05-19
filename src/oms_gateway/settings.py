@@ -131,6 +131,26 @@ class Settings(BaseSettings):
     halt_key: str = "system:halt"
     halt_strategy_prefix: str = "system:halt:strategy:"
 
+    # ── BULLETPROOF STRATEGY WHITELIST (2026-05-19 emergency) ───────────────
+    # CSV of strategy slugs ALLOWED to place live orders. Empty string = no
+    # whitelist enforced (back-compat). When set, preflight HARD-REJECTS any
+    # alpha whose strategy_slug is not in this list, BEFORE any other check.
+    #
+    # Why: budget caps + env _ENABLED flags both had failure modes that
+    # allowed non-edge strategies to fire $240+ of orders in 9 seconds onto
+    # pre-market token-launch markets we have ZERO edge on. The whitelist
+    # is a single non-bypassable invariant: only strategies in this list
+    # can ever reach the live order path, period.
+    #
+    # Adding a strategy here is a deliberate operator action. Default is
+    # chainlink_lag only — the strategy with proven data-stream edge.
+    #
+    # When adding new strategies: extend the CSV like
+    #   LIVE_STRATEGY_WHITELIST_CSV=poly-chainlink-lag,new-strategy-slug
+    # NEVER clear this to empty in production — that would re-introduce the
+    # all-strategies-can-fire failure mode.
+    live_strategy_whitelist_csv: str = "poly-chainlink-lag"
+
     # Cap-breach event stream — Phase 2.9. Whenever the bucket or cluster
     # concentration guard rejects an intent, we XADD the breach payload
     # here so pa-agent can forward to Telegram.

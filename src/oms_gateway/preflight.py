@@ -423,6 +423,23 @@ def evaluate(
         Decision with accept=True if all checks pass, else first failing
         Decision with reason + (optional) period_breached + snapshot_used.
     """
+    # ── BULLETPROOF WHITELIST (TOP gate, 2026-05-19) ────────────────────
+    # ANY alpha whose strategy is not in the live whitelist is REJECTED
+    # before any other check. This is the non-bypassable invariant —
+    # cannot be defeated by env mistakes, race conditions, or budget bugs.
+    whitelist_csv = (settings.live_strategy_whitelist_csv or "").strip()
+    if whitelist_csv:
+        allowed = {s.strip() for s in whitelist_csv.split(",") if s.strip()}
+        if strategy_slug is None or strategy_slug not in allowed:
+            return Decision(
+                accept=False,
+                reason="strategy_not_whitelisted_for_live",
+                snapshot_used={
+                    "strategy_slug": strategy_slug,
+                    "whitelist": sorted(allowed),
+                },
+            )
+
     if halt_active:
         return Decision(accept=False, reason="system_halted")
 
