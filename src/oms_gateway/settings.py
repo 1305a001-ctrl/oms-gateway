@@ -188,6 +188,40 @@ class Settings(BaseSettings):
     # level instead of relying on bucket caps to do double duty.
     allow_same_direction_scale_in_strategies_csv: str = ""
 
+    # --- 2026-05-20 — bankroll-calc contamination exclusions ---
+    # The bankroll refresher reads SUM(realized_pnl_usd) from `positions`
+    # to compute the active sizing tier. Two classes of rows MUST NOT
+    # count toward bankroll because they don't represent real wallet
+    # capital movement:
+    #
+    # 1. Paper positions (metadata.paper='true'): simulated fills, no
+    #    capital moved on-chain.
+    # 2. Simulation strategy slugs: legacy rows from earlier exploration
+    #    (e.g. poly-publisher-taker-*, poly-politics-momentum). These have
+    #    inflated qty + fake exit prices and currently contribute $179k+
+    #    of fake realized_pnl_usd.
+    #
+    # Without these filters, the refresher reports pnl=$216k → T6_top
+    # tier → budget=$5000 / notional=$1200. When the operator flips a
+    # strategy live, the gateway would authorize wildly-oversize trades
+    # against the real $437 bankroll.
+    #
+    # Add new simulation slugs as discovered:
+    #   BANKROLL_EXCLUDED_STRATEGY_SLUGS_CSV=poly-publisher-taker,poly-publisher-taker-long,...
+    # Default below covers the contaminated set found in 2026-05-20 audit.
+    bankroll_excluded_strategy_slugs_csv: str = (
+        "poly-publisher-taker,"
+        "poly-publisher-taker-long,"
+        "poly-publisher-taker-aggressive,"
+        "poly-publisher-taker-aggressive-long,"
+        "poly-publisher-taker-conservative,"
+        "poly-publisher-taker-conservative-long,"
+        "poly-publisher-taker-gamma-ok,"
+        "poly-publisher-taker-sol,"
+        "poly-publisher-taker-xrp,"
+        "poly-politics-momentum"
+    )
+
     # Cap-breach event stream — Phase 2.9. Whenever the bucket or cluster
     # concentration guard rejects an intent, we XADD the breach payload
     # here so pa-agent can forward to Telegram.
