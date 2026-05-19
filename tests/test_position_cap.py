@@ -191,8 +191,16 @@ def test_position_cap_mult_configurable():
 
 # --- evaluate() integration -------------------------------------------------
 
-def test_evaluate_position_cap_blocks_after_drawdown_passes():
-    """Existing $1000 long, fast-intraday cap $250 → cap breach takes priority."""
+def test_evaluate_position_cap_blocks_after_drawdown_passes(monkeypatch):
+    """Existing $1000 long, fast-intraday cap $250 → cap breach takes priority.
+
+    Note (2026-05-20): the duplicate-position guard would otherwise reject
+    this with reason='duplicate_position_same_direction'. Opt the test
+    strategy into scale-in so position_cap is the next gate to trip."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(
+        s.settings, "allow_same_direction_scale_in_strategies_csv", "test-strat",
+    )
     existing = ExistingPosition(
         qty=10.0, side="long", mark_price=100.0, avg_entry_price=100.0,
     )
