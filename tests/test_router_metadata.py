@@ -11,7 +11,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-import pytest
 from signals_contract.alpha import Alpha, ContributingSource
 
 from oms_gateway.preflight import Decision
