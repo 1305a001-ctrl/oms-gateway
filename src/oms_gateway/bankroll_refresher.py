@@ -29,11 +29,20 @@ log = logging.getLogger(__name__)
 # Polymarket-only by default so the live-flip ramp is driven by the
 # already-validated lane, not by Binance/Alpaca paper noise. Operator
 # can broaden via env (TODO if needed).
+#
+# 2026-05-19 fix: EXCLUDE positions with metadata->>'paper_purged'='true'.
+# The paper-purge cleanup (closing pre-flip paper positions to zero out
+# their PnL contribution) accidentally left their metadata.realized_pnl_usd
+# values in the DB. Some were $200+, others negative. Summing all closed
+# Polymarket positions gave $215k+ fake PnL → bankroll-aware tier was
+# T6_top → budget would have been $5000+ if the feature were enabled.
+# Filtering them out gives an accurate realized PnL for live-only trades.
 TOTAL_REALIZED_PNL_SQL = """
 SELECT COALESCE(SUM(realized_pnl_usd), 0)::DOUBLE PRECISION AS pnl
 FROM positions
 WHERE status = 'closed'
   AND venue = 'polymarket'
+  AND COALESCE(metadata->>'paper_purged', 'false') != 'true'
 """
 
 
