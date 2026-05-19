@@ -151,6 +151,23 @@ class Settings(BaseSettings):
     # all-strategies-can-fire failure mode.
     live_strategy_whitelist_csv: str = "poly-chainlink-lag"
 
+    # --- 2026-05-19 — per-strategy paper mode (Option B) ---
+    # Comma-separated slugs whose alphas should route through the adapter's
+    # dry-run code path (simulated fills) regardless of the global dry-run
+    # setting. Lets us validate a strategy end-to-end (fill, exit monitor,
+    # SL/TP firing) without putting real capital at risk, while other
+    # strategies continue to trade live.
+    #
+    # The flag flows alpha → intent.metadata.paper → dispatcher payload →
+    # poly-adapter, where it forces the dry-run branch on /orders/place.
+    # Risk-watcher inherits it via the C.1 metadata propagation, so paper
+    # positions are visible (and the chainlink_exit_monitor uses paper=True
+    # on the SELL leg when closing them).
+    #
+    # Default empty = nothing is in paper mode.
+    # Example: PAPER_STRATEGY_SLUGS=poly-chainlink-lag
+    paper_strategy_slugs: str = ""
+
     # Cap-breach event stream — Phase 2.9. Whenever the bucket or cluster
     # concentration guard rejects an intent, we XADD the breach payload
     # here so pa-agent can forward to Telegram.

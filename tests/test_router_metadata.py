@@ -15,6 +15,7 @@ from signals_contract.alpha import Alpha, ContributingSource
 
 from oms_gateway.preflight import Decision
 from oms_gateway.router import build_intent_metadata
+from oms_gateway.settings import settings
 
 
 def _alpha(metadata: dict | None = None, *, sources: list | None = None) -> Alpha:
@@ -119,6 +120,87 @@ def test_empty_alpha_metadata_yields_empty_dict():
     )
     assert md["alpha_metadata"] == {}
     assert md["alpha_edge_pp"] is None
+
+
+# ─── paper flag — per-strategy paper mode (2026-05-19 Option B) ─────────
+
+
+def test_paper_flag_false_by_default():
+    """Default settings = empty PAPER_STRATEGY_SLUGS → no strategy is in
+    paper mode. Critical default: live trading is the path unless explicitly
+    opted out."""
+    md = build_intent_metadata(
+        alpha=_alpha(metadata={"edge_pp": 0.25}),
+        bucket="poly-fast",
+        cluster="poly:bitcoin",
+        lp_mult=1.0,
+        decision=_decision(),
+        strategy_slug="poly-chainlink-lag",
+    )
+    assert md["paper"] is False
+
+
+def test_paper_flag_true_when_strategy_in_whitelist(monkeypatch):
+    """Adding a strategy to PAPER_STRATEGY_SLUGS marks its intents paper=True."""
+    monkeypatch.setattr(settings, "paper_strategy_slugs", "poly-chainlink-lag", raising=False)
+    md = build_intent_metadata(
+        alpha=_alpha(metadata={"edge_pp": 0.25}),
+        bucket="poly-fast",
+        cluster="poly:bitcoin",
+        lp_mult=1.0,
+        decision=_decision(),
+        strategy_slug="poly-chainlink-lag",
+    )
+    assert md["paper"] is True
+
+
+def test_paper_flag_isolated_per_strategy(monkeypatch):
+    """Other strategies NOT in the whitelist remain live (paper=False)
+    even when the whitelist is non-empty. This is the whole point — one
+    strategy in paper, others continue trading real."""
+    monkeypatch.setattr(settings, "paper_strategy_slugs", "poly-chainlink-lag", raising=False)
+    md = build_intent_metadata(
+        alpha=_alpha(metadata={"edge_pp": 0.25}),
+        bucket="poly-fast",
+        cluster="poly:bitcoin",
+        lp_mult=1.0,
+        decision=_decision(),
+        strategy_slug="poly-publisher-taker-long",
+    )
+    assert md["paper"] is False
+
+
+def test_paper_flag_handles_csv_with_whitespace(monkeypatch):
+    """Operators often add slugs with stray spaces — must parse cleanly."""
+    monkeypatch.setattr(
+        settings, "paper_strategy_slugs",
+        "  poly-foo , poly-chainlink-lag,  poly-bar  ",
+        raising=False,
+    )
+    md = build_intent_metadata(
+        alpha=_alpha(metadata={"edge_pp": 0.25}),
+        bucket="poly-fast",
+        cluster="poly:bitcoin",
+        lp_mult=1.0,
+        decision=_decision(),
+        strategy_slug="poly-chainlink-lag",
+    )
+    assert md["paper"] is True
+
+
+def test_paper_flag_false_when_strategy_slug_none(monkeypatch):
+    """Defensive: if strategy_slug couldn't be resolved (None), don't paper-trade
+    by accident — fall back to live (paper=False)."""
+    monkeypatch.setattr(settings, "paper_strategy_slugs", "poly-chainlink-lag", raising=False)
+    md = build_intent_metadata(
+        alpha=_alpha(metadata={"edge_pp": 0.25}),
+        bucket="poly-fast",
+        cluster="poly:bitcoin",
+        lp_mult=1.0,
+        decision=_decision(),
+        strategy_slug=None,
+    )
+    assert md["paper"] is False
 
 
 def test_existing_fields_unchanged():
