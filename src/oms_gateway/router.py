@@ -12,6 +12,10 @@ from uuid import UUID
 import structlog
 from signals_contract.alpha import Alpha
 
+from oms_gateway.budget_reservation import (
+    release_exposure,
+    reserve_exposure,
+)
 from oms_gateway.db import db
 from oms_gateway.lp_multiplier import fetch_multiplier as fetch_lp_multiplier
 from oms_gateway.preflight import (
@@ -176,13 +180,36 @@ async def _route_one(alpha: Alpha) -> None:
     # Phase 3.1 — per-strategy budget: reuse the exposure already fetched
     # for sizing (above). When direction=='flat' (no sizing path), fetch now
     # so the preflight strategy_halt + budget checks still see real exposure.
-    strategy_exposure = (
+    strategy_exposure_db = (
         strategy_exposure_for_sizing
         if alpha.direction != "flat"
         else (
             await db.strategy_open_exposure_usd(strategy_slug)
             if strategy_slug else 0.0
         )
+    )
+
+    # 2026-05-19 CRITICAL #2 — atomic Redis reservation to close the race
+    # where N concurrent alphas all see strategy_exposure_db=0 (DB not yet
+    # updated). Increment a Redis counter atomically; include in budget
+    # check; roll back on reject.
+    reservation_total_pending = 0.0
+    if (
+        strategy_slug
+        and alpha.direction != "flat"
+        and proposed_notional is not None
+        and proposed_notional > 0
+    ):
+        reservation_total_pending = await reserve_exposure(
+            r(), strategy_slug, proposed_notional,
+        )
+
+    # Total exposure for the budget check = DB-confirmed open + everything
+    # reserved (incl. THIS intent — that's how the cap correctly rejects
+    # the Nth concurrent intent when the prior N-1 already reserved their
+    # share). The race condition is closed because INCRBYFLOAT is atomic.
+    strategy_exposure = strategy_exposure_db + max(
+        0.0, reservation_total_pending - (proposed_notional or 0.0),
     )
 
     decision = evaluate(
@@ -199,6 +226,12 @@ async def _route_one(alpha: Alpha) -> None:
         cluster_open_exposure_usd=cluster_exposure,
         strategy_open_exposure_usd=strategy_exposure,
     )
+
+    # If preflight rejected, roll back the reservation we made — this
+    # intent isn't going to add real exposure, so other intents shouldn't
+    # be blocked by our phantom reservation.
+    if not decision.accept and strategy_slug and proposed_notional and proposed_notional > 0:
+        await release_exposure(r(), strategy_slug, proposed_notional)
 
     # Phase 3.2 follow-up — when sizing returned 0 (cap saturated), skip the
     # INSERT entirely. Was: 0-notional intents got queued, then the adapter
