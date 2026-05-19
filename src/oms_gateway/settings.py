@@ -168,6 +168,26 @@ class Settings(BaseSettings):
     # Example: PAPER_STRATEGY_SLUGS=poly-chainlink-lag
     paper_strategy_slugs: str = ""
 
+    # --- 2026-05-20 — duplicate-position guard (Bug 3 fix) ---
+    # By DEFAULT, any same-direction alpha for an asset where the same
+    # strategy already has an open position is REJECTED with reason
+    # 'duplicate_position_same_direction'. This prevents the strategy's
+    # re-evaluation tick (when a market stays in the watchlist longer than
+    # the strategy's cooldown) from scaling-in to a 2× / 3× position.
+    #
+    # Strategies that LEGITIMATELY scale in (e.g. an averaging perp strategy)
+    # must be added here to opt out of the guard:
+    #   ALLOW_SAME_DIRECTION_SCALE_IN_STRATEGIES_CSV=averaging-perp,grid-bot
+    #
+    # Background: 2026-05-19 saw chainlink_lag emit two BUY alphas for the
+    # same btc-updown-5m market 77s apart (cooldown is 60s). positions_aggregator
+    # correctly scaled them into one $20 position, breaching the operator's
+    # $10/trade cap intent. The cap check `_would_breach_position_cap` only
+    # rejects when would-be exceeds the BUCKET cap (much higher than $10),
+    # so the bug slipped through. This guard catches it at the (strategy, asset)
+    # level instead of relying on bucket caps to do double duty.
+    allow_same_direction_scale_in_strategies_csv: str = ""
+
     # Cap-breach event stream — Phase 2.9. Whenever the bucket or cluster
     # concentration guard rejects an intent, we XADD the breach payload
     # here so pa-agent can forward to Telegram.

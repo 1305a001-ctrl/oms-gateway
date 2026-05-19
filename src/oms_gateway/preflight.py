@@ -136,6 +136,50 @@ def _check_dd_breach(
     return None
 
 
+def _would_duplicate_position(
+    *,
+    existing: ExistingPosition | None,
+    alpha_direction: Literal["long", "short", "flat"],
+    strategy_slug: str | None,
+) -> Decision | None:
+    """Reject a same-direction alpha that would scale into an existing
+    (strategy, asset) position, unless the strategy has explicitly opted
+    into scale-in via ALLOW_SAME_DIRECTION_SCALE_IN_STRATEGIES_CSV.
+
+    Why this check is separate from the bucket position cap: the bucket
+    cap is per-bucket × multiplier (typically ≥ $50 in our config), so a
+    $10 + $10 = $20 scale-in never trips it. But the operator's policy
+    on chainlink_lag (2026-05-19) is "$10 per trade, 10 positions max"
+    where each trade should be ONE independent position. This guard
+    enforces that semantic at the (strategy, asset) level.
+
+    flat/close alphas always pass (those reduce position, never create).
+    Counter-direction alphas always pass (those reduce/reverse position).
+    """
+    if alpha_direction == "flat":
+        return None
+    if existing is None:
+        return None
+    if existing.side != alpha_direction:
+        return None  # counter-direction = close/reverse, never a duplicate
+
+    csv = (settings.allow_same_direction_scale_in_strategies_csv or "").strip()
+    allowed = {s.strip() for s in csv.split(",") if s.strip()}
+    if strategy_slug and strategy_slug in allowed:
+        return None
+
+    return Decision(
+        accept=False,
+        reason="duplicate_position_same_direction",
+        snapshot_used={
+            "strategy_slug": strategy_slug,
+            "existing_qty": existing.qty,
+            "existing_side": existing.side,
+            "alpha_direction": alpha_direction,
+        },
+    )
+
+
 def _resolve_position_cap_usd(bucket: str | None) -> float:
     """Per-bucket position cap = bucket_pct × position_cap_mult × equity. Pure."""
     bucket_pct = settings.bucket_size_pct_max.get(
@@ -462,6 +506,17 @@ def evaluate(
         breach = _check_dd_breach(period, risk_snapshots, cap)
         if breach is not None:
             return breach
+
+    # 2026-05-20 Bug 3 — block duplicate same-direction scale-ins BEFORE
+    # the bucket cap check. The bucket cap is too permissive (≥ $50) to
+    # catch a $10 + $10 = $20 scale-in on a strategy with $10/trade policy.
+    dup_breach = _would_duplicate_position(
+        existing=existing_position,
+        alpha_direction=alpha_direction,
+        strategy_slug=strategy_slug,
+    )
+    if dup_breach is not None:
+        return dup_breach
 
     pos_breach = _would_breach_position_cap(
         existing=existing_position,

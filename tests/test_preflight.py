@@ -256,3 +256,96 @@ def test_strategy_budget_skipped_when_flat(monkeypatch):
         alpha_direction="flat",
     )
     assert d.reason != "strategy_budget_breached"
+
+
+# --- 2026-05-20 Bug 3 — duplicate same-direction position guard ----------
+
+
+def _existing(side: str, qty: float = 20.0, entry: float = 0.5):
+    """Build an ExistingPosition snapshot for testing."""
+    from oms_gateway.preflight import ExistingPosition
+    return ExistingPosition(
+        qty=qty, side=side, mark_price=entry, avg_entry_price=entry,
+    )
+
+
+def test_duplicate_same_direction_rejected_by_default(monkeypatch):
+    """THE BUG 3 FIX. Same strategy + same asset + same direction with an
+    open position → reject as duplicate. Without this, chainlink_lag's
+    re-emit tick scales $10 into $20."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "allow_same_direction_scale_in_strategies_csv", "")
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=_existing("long"),
+        alpha_direction="long",
+        proposed_notional_usd=10.0,
+    )
+    assert not d.accept
+    assert d.reason == "duplicate_position_same_direction"
+
+
+def test_counter_direction_allowed_for_close(monkeypatch):
+    """Counter-direction alpha = close/reverse; must always pass the
+    duplicate guard (it's reducing, not adding)."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "allow_same_direction_scale_in_strategies_csv", "")
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=_existing("long"),  # have long
+        alpha_direction="short",              # closing
+        proposed_notional_usd=10.0,
+    )
+    assert d.reason != "duplicate_position_same_direction"
+
+
+def test_no_existing_position_passes(monkeypatch):
+    """Fresh open with no existing position → no duplicate issue."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "allow_same_direction_scale_in_strategies_csv", "")
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=None,
+        alpha_direction="long",
+        proposed_notional_usd=10.0,
+    )
+    assert d.reason != "duplicate_position_same_direction"
+
+
+def test_opted_in_strategy_can_scale_in(monkeypatch):
+    """If strategy is whitelisted for scale-in (e.g. averaging-perp),
+    the duplicate guard must NOT reject — let bucket cap do its job."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(
+        s.settings, "allow_same_direction_scale_in_strategies_csv",
+        "averaging-perp,grid-bot",
+    )
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="averaging-perp",
+        risk_snapshots={},
+        existing_position=_existing("long"),
+        alpha_direction="long",
+        proposed_notional_usd=10.0,
+    )
+    assert d.reason != "duplicate_position_same_direction"
+
+
+def test_flat_direction_skips_guard(monkeypatch):
+    """flat = close, always passes (reduces position)."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "allow_same_direction_scale_in_strategies_csv", "")
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=_existing("long"),
+        alpha_direction="flat",
+    )
+    assert d.reason != "duplicate_position_same_direction"
