@@ -81,6 +81,44 @@ async def _check_halts(strategy_slug: str | None) -> tuple[bool, bool]:
     return bool(sys_h), bool(strat_h)
 
 
+def build_intent_metadata(
+    *,
+    alpha: Alpha,
+    bucket: str | None,
+    cluster: str | None,
+    lp_mult: float,
+    decision,
+) -> dict:
+    """Build the intent metadata dict from alpha + preflight context.
+
+    `alpha_edge_pp` is hoisted to top-level for SQL queryability; the full
+    `alpha.metadata` is also preserved verbatim under `alpha_metadata` so
+    future EV analyses can segment on any strategy state captured at the
+    decision boundary (spread_pp, fair_yes, time_left_s, etc.)."""
+    alpha_md = dict(alpha.metadata or {})
+    return {
+        "alpha_id": str(alpha.id),
+        "alpha_confidence": alpha.confidence,
+        "alpha_edge_bps": alpha.edge_bps,
+        "alpha_edge_pp": alpha_md.get("edge_pp"),
+        "alpha_reasoning": alpha.reasoning,
+        "alpha_metadata": alpha_md,
+        "bucket": bucket,
+        "cluster": cluster,
+        "lp_multiplier": lp_mult,    # Phase 3.0 — for forensic auditing
+        "preflight_decision": {
+            "accept": decision.accept,
+            "reason": decision.reason,
+            "period_breached": decision.period_breached,
+            "snapshot_used": decision.snapshot_used,
+        },
+        "contributing_sources": [
+            {"source_id": s.source_id, "weight": s.weight}
+            for s in alpha.contributing_sources
+        ],
+    }
+
+
 async def _route_one(alpha: Alpha) -> None:
     if alpha.direction == "watch":
         log.debug("alpha.watch_skipped", alpha_id=str(alpha.id))
@@ -262,25 +300,13 @@ async def _route_one(alpha: Alpha) -> None:
 
     idempotency_key = f"{strategy_slug or strategy_id}:{alpha.id}:entry"
 
-    metadata = {
-        "alpha_id": str(alpha.id),
-        "alpha_confidence": alpha.confidence,
-        "alpha_edge_bps": alpha.edge_bps,
-        "alpha_reasoning": alpha.reasoning,
-        "bucket": bucket,
-        "cluster": cluster,
-        "lp_multiplier": lp_mult,    # Phase 3.0 — for forensic auditing
-        "preflight_decision": {
-            "accept": decision.accept,
-            "reason": decision.reason,
-            "period_breached": decision.period_breached,
-            "snapshot_used": decision.snapshot_used,
-        },
-        "contributing_sources": [
-            {"source_id": s.source_id, "weight": s.weight}
-            for s in alpha.contributing_sources
-        ],
-    }
+    metadata = build_intent_metadata(
+        alpha=alpha,
+        bucket=bucket,
+        cluster=cluster,
+        lp_mult=lp_mult,
+        decision=decision,
+    )
 
     intent_id = await db.insert_intent(
         strategy_id=strategy_id,
