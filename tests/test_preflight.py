@@ -349,3 +349,147 @@ def test_flat_direction_skips_guard(monkeypatch):
         alpha_direction="flat",
     )
     assert d.reason != "duplicate_position_same_direction"
+
+
+# ── 2026-05-20 — direction-disable guard (post Audit A) ─────────────────
+
+
+def test_direction_disabled_rejects_matching_pair(monkeypatch):
+    """When STRATEGY_DISABLE_DIRECTIONS_CSV contains 'poly-chainlink-lag:long',
+    every long alpha for chainlink_lag must be rejected — this is the
+    safety guard while the fair_yes vol estimator is being fixed.
+    """
+    from oms_gateway import settings as s
+    monkeypatch.setattr(
+        s.settings, "strategy_disable_directions_csv",
+        "poly-chainlink-lag:long",
+    )
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=None,
+        alpha_direction="long",
+        proposed_notional_usd=10.0,
+    )
+    assert not d.accept
+    assert d.reason == "direction_disabled_pre_calibration"
+
+
+def test_direction_disable_doesnt_affect_other_strategies(monkeypatch):
+    """A `poly-chainlink-lag:long` disable does NOT block other strategies'
+    long alphas — chainlink_lag's vol estimate problem is its own."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(
+        s.settings, "strategy_disable_directions_csv",
+        "poly-chainlink-lag:long",
+    )
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-target-taker",
+        risk_snapshots={},
+        existing_position=None,
+        alpha_direction="long",
+        proposed_notional_usd=10.0,
+    )
+    assert d.reason != "direction_disabled_pre_calibration"
+
+
+def test_direction_disable_allows_opposite_direction(monkeypatch):
+    """Disabling long doesn't disable short — BUY_NO must remain enabled
+    since calibration analysis showed it exploits the bias favorably."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(
+        s.settings, "strategy_disable_directions_csv",
+        "poly-chainlink-lag:long",
+    )
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=None,
+        alpha_direction="short",
+        proposed_notional_usd=10.0,
+    )
+    assert d.reason != "direction_disabled_pre_calibration"
+
+
+def test_direction_disable_csv_multiple_pairs(monkeypatch):
+    """Several pairs in the CSV — all must be enforced independently.
+    Test scenario: both chainlink_lag long AND target_taker short disabled.
+    """
+    from oms_gateway import settings as s
+    monkeypatch.setattr(
+        s.settings, "strategy_disable_directions_csv",
+        "poly-chainlink-lag:long, poly-target-taker:short",
+    )
+    # chainlink_lag long: blocked
+    d1 = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=None, alpha_direction="long",
+        proposed_notional_usd=10.0,
+    )
+    assert d1.reason == "direction_disabled_pre_calibration"
+    # target_taker short: blocked
+    d2 = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-target-taker",
+        risk_snapshots={},
+        existing_position=None, alpha_direction="short",
+        proposed_notional_usd=10.0,
+    )
+    assert d2.reason == "direction_disabled_pre_calibration"
+
+
+def test_direction_disable_flat_always_allowed(monkeypatch):
+    """Closing positions (flat) must NEVER be blocked by the direction
+    disable — we want to be able to close even on disabled directions."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(
+        s.settings, "strategy_disable_directions_csv",
+        "poly-chainlink-lag:long,poly-chainlink-lag:short",
+    )
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=_existing("long"),
+        alpha_direction="flat",
+        proposed_notional_usd=10.0,
+    )
+    assert d.reason != "direction_disabled_pre_calibration"
+
+
+def test_direction_disable_empty_csv_does_nothing(monkeypatch):
+    """Empty/unset CSV → no direction blocked. Default state."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(s.settings, "strategy_disable_directions_csv", "")
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=None, alpha_direction="long",
+        proposed_notional_usd=10.0,
+    )
+    assert d.reason != "direction_disabled_pre_calibration"
+
+
+def test_direction_disable_malformed_pair_ignored(monkeypatch):
+    """A malformed entry (missing ':') must not crash — just skip it.
+    Defensive: a typo in env shouldn't break the gateway."""
+    from oms_gateway import settings as s
+    monkeypatch.setattr(
+        s.settings, "strategy_disable_directions_csv",
+        "garbage,poly-chainlink-lag:long",
+    )
+    d = evaluate(
+        halt_active=False, strategy_halt_active=False,
+        strategy_slug="poly-chainlink-lag",
+        risk_snapshots={},
+        existing_position=None, alpha_direction="long",
+        proposed_notional_usd=10.0,
+    )
+    # The valid pair still blocks
+    assert d.reason == "direction_disabled_pre_calibration"

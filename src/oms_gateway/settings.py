@@ -188,6 +188,23 @@ class Settings(BaseSettings):
     # level instead of relying on bucket caps to do double duty.
     allow_same_direction_scale_in_strategies_csv: str = ""
 
+    # --- 2026-05-20 — operator-disabled (strategy, direction) pairs ---
+    # Format: STRATEGY_DISABLE_DIRECTIONS_CSV=slug:direction,slug:direction,...
+    # Example: 'poly-chainlink-lag:long' blocks all BUY_YES alphas for the
+    # chainlink_lag strategy. Useful when calibration analysis shows one
+    # arm of the strategy has biased (negative) edge and needs to be
+    # disabled until the underlying signal is fixed.
+    #
+    # Added after Audit A (2026-05-20) revealed the vol estimator under-
+    # reports realized vol by ~50%, biasing fair_yes toward extremes.
+    # BUY_YES emissions trigger on extreme-HIGH fair_yes where actual YES
+    # rate is much lower than the model says → systematic loss.
+    # BUY_NO emissions exploit the same bias in the favorable direction.
+    # Active env override: STRATEGY_DISABLE_DIRECTIONS_CSV=poly-chainlink-lag:long
+    # Remove the override once the vol estimator is fixed AND a fresh
+    # calibration audit shows BOTH arms within +/- 5pp on all deciles.
+    strategy_disable_directions_csv: str = ""
+
     # --- 2026-05-20 — bankroll-calc contamination exclusions ---
     # The bankroll refresher reads SUM(realized_pnl_usd) from `positions`
     # to compute the active sizing tier. Two classes of rows MUST NOT

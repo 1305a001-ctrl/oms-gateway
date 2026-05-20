@@ -136,6 +136,57 @@ def _check_dd_breach(
     return None
 
 
+def _direction_disabled_for_strategy(
+    *,
+    strategy_slug: str | None,
+    alpha_direction: Literal["long", "short", "flat"],
+) -> Decision | None:
+    """Reject alphas whose direction is operator-disabled for the strategy.
+
+    Added 2026-05-20 after the fair_yes calibration audit: vol estimator
+    under-reports realized vol by ~50%, biasing fair_yes toward extremes.
+    BUY_YES emissions trigger on extreme-HIGH fair_yes (where actual YES
+    rate is much lower than the model says) → systematic loss. BUY_NO
+    accidentally exploits the same bias on the favorable side → wins.
+
+    Format: STRATEGY_DISABLE_DIRECTIONS_CSV=strategy_slug:direction,...
+    Example: `poly-chainlink-lag:long` blocks all BUY_YES alphas for
+    chainlink_lag. Multiple pairs comma-separated.
+
+    Remove the env override (or wipe the setting) once the vol estimator
+    is fixed and a fresh calibration audit shows BOTH arms calibrated.
+    """
+    if alpha_direction == "flat":
+        return None  # closing positions always allowed
+    if not strategy_slug:
+        return None
+
+    csv = (settings.strategy_disable_directions_csv or "").strip()
+    if not csv:
+        return None
+    disabled_pairs: set[tuple[str, str]] = set()
+    for pair in csv.split(","):
+        pair = pair.strip()
+        if ":" not in pair:
+            continue
+        slug, direction = pair.split(":", 1)
+        disabled_pairs.add((slug.strip(), direction.strip().lower()))
+
+    if (strategy_slug, alpha_direction) in disabled_pairs:
+        return Decision(
+            accept=False,
+            reason="direction_disabled_pre_calibration",
+            snapshot_used={
+                "strategy_slug": strategy_slug,
+                "alpha_direction": alpha_direction,
+                "disabled_pairs": sorted(
+                    f"{s}:{d}" for s, d in disabled_pairs
+                ),
+            },
+        )
+    return None
+
+
 def _would_duplicate_position(
     *,
     existing: ExistingPosition | None,
@@ -506,6 +557,16 @@ def evaluate(
         breach = _check_dd_breach(period, risk_snapshots, cap)
         if breach is not None:
             return breach
+
+    # 2026-05-20 calibration audit — block operator-disabled (strategy,
+    # direction) pairs first. Runs ahead of all other checks so disabled
+    # directions can't sneak through via bucket-cap edge cases.
+    dir_breach = _direction_disabled_for_strategy(
+        strategy_slug=strategy_slug,
+        alpha_direction=alpha_direction,
+    )
+    if dir_breach is not None:
+        return dir_breach
 
     # 2026-05-20 Bug 3 — block duplicate same-direction scale-ins BEFORE
     # the bucket cap check. The bucket cap is too permissive (≥ $50) to
