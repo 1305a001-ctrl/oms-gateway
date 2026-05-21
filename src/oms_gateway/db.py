@@ -1,8 +1,8 @@
 """Postgres connection pool + oms_intents writer + risk_ledger reader."""
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 import structlog
@@ -197,6 +197,58 @@ class DB:
             json.dumps(metadata, default=_json_default),
         )
         return row["id"] if row else None
+
+    async def record_intent_fill(
+        self,
+        *,
+        intent_id: UUID | None,
+        strategy_id: UUID,
+        venue: str,
+        asset: str,
+        side: str,
+        order_type: str,
+        notional_usd: float | None,
+        outcome: str,
+        rejection_reason: str | None,
+        quote_at_intent: float | None = None,
+        meta: dict | None = None,
+    ) -> None:
+        """Best-effort intent-side write to the `fills` TCA table.
+
+        NEVER raises — a fills-write failure must not affect order routing
+        (wrapped in try/except, logged at warning). Captures the intent side:
+        strategy/venue/asset/side/size/outcome/reject_reason + intent/submit
+        timestamps. The price + fill fields (fill_price, fill_ts, fee, ack_ts)
+        are backfilled by the venue adapter on execution — a separate change.
+        """
+        now = datetime.now(timezone.utc)
+        try:
+            await self.pool.execute(
+                """
+                INSERT INTO fills
+                  (fill_id, strategy_id, venue, asset, side, intent_ts, submit_ts,
+                   quote_at_intent, quote_at_submit, size, order_type, outcome,
+                   reject_reason, parent_intent_id, meta)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
+                """,
+                uuid4(),
+                str(strategy_id),
+                venue,
+                asset,
+                side,
+                now,
+                now,
+                quote_at_intent,
+                quote_at_intent,
+                notional_usd,
+                order_type,
+                outcome,
+                rejection_reason,
+                intent_id,
+                json.dumps(meta or {}, default=_json_default),
+            )
+        except Exception as e:  # noqa: BLE001 — never let TCA break routing
+            log.warning("fills.write_failed", error=str(e), intent_id=str(intent_id))
 
 
 def _json_default(o: Any) -> Any:

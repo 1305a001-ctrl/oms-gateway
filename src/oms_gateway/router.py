@@ -359,6 +359,25 @@ async def _route_one(alpha: Alpha) -> None:
             strategy_slug=strategy_slug,
         )
 
+    # TCA: best-effort intent-side write to the `fills` table (operator
+    # infrastructure playbook §2). Never blocks routing — record_intent_fill
+    # swallows its own errors. Only on a freshly-recorded intent (not a
+    # duplicate). Price/fill fields are backfilled by the venue adapter.
+    if intent_id is not None:
+        await db.record_intent_fill(
+            intent_id=intent_id,
+            strategy_id=strategy_id,
+            venue=venue,
+            asset=alpha.asset,
+            side=side,
+            order_type="market",
+            notional_usd=notional,
+            outcome="queued" if decision.accept else "rejected",
+            rejection_reason=decision.reason,
+            quote_at_intent=alpha.metadata.get("fair_yes") if isinstance(alpha.metadata, dict) else None,
+            meta={"alpha_id": str(alpha.id), "alpha_edge_bps": alpha.edge_bps},
+        )
+
     # Concentration-cap breaches are operator-visible — XADD to the
     # cap-breach stream so pa-agent can forward to Telegram. We
     # deliberately exclude `position_cap_exceeded` (per-strategy, common
