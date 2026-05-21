@@ -1,6 +1,6 @@
 """Postgres connection pool + oms_intents writer + risk_ledger reader."""
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -221,7 +221,7 @@ class DB:
         timestamps. The price + fill fields (fill_price, fill_ts, fee, ack_ts)
         are backfilled by the venue adapter on execution — a separate change.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         try:
             await self.pool.execute(
                 """

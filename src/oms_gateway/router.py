@@ -374,7 +374,11 @@ async def _route_one(alpha: Alpha) -> None:
             notional_usd=notional,
             outcome="queued" if decision.accept else "rejected",
             rejection_reason=decision.reason,
-            quote_at_intent=alpha.metadata.get("fair_yes") if isinstance(alpha.metadata, dict) else None,
+            quote_at_intent=(
+                alpha.metadata.get("fair_yes")
+                if isinstance(alpha.metadata, dict)
+                else None
+            ),
             meta={"alpha_id": str(alpha.id), "alpha_edge_bps": alpha.edge_bps},
         )
 
